@@ -48,7 +48,7 @@ A10000410000000000000001 = {isa = PBXGroup; children = (A10000110000000000000001
 A10000420000000000000001 = {isa = PBXGroup; children = (A10000220000000000000001); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 /* Begin PBXNativeTarget section */
-A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000000001,A10000300000000000000001,A10000320000000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000220000000000000001; productType = "com.apple.product-type.application"; };
+A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000220000000000000001; productType = "com.apple.product-type.application"; };
 /* End PBXNativeTarget section */
 /* Begin PBXProject section */
 A10000600000000000000001 = {isa = PBXProject; attributes = {LastUpgradeCheck = 2600;}; buildConfigurationList = A10000710000000000000001; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en); mainGroup = A10000400000000000000001; productRefGroup = A10000420000000000000001; projectDirPath = ""; projectRoot = ""; targets = (A10000500000000000000001); };
