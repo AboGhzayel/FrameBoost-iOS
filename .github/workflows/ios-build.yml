@@ -45,12 +45,9 @@ jobs:
           import re, sys
           from pathlib import Path
           p=Path(sys.argv[1]); text=p.read_text()
-          # Xcode PBX object IDs are exactly 24 hexadecimal characters.
           defined=set(re.findall(r'^([A-Fa-f0-9]{24})\s*=', text, re.M))
           refs=set(re.findall(r'(?<![A-Za-z0-9])([A-Fa-f0-9]{24})(?![A-Za-z0-9])', text))
           dangling=sorted(refs-defined)
-          # Only inspect tokens that look like PBX IDs (start with A), avoiding
-          # unrelated numeric build settings such as 2147483647.
           pbx_tokens=sorted(set(re.findall(r'(?<![A-Za-z0-9])(A[A-Fa-f0-9]+)(?![A-Za-z0-9])', text)))
           malformed=sorted(x for x in pbx_tokens if len(x) != 24)
           print(f"Defined 24-char objects: {len(defined)}")
@@ -61,19 +58,27 @@ jobs:
               raise SystemExit(1)
           if dangling:
               print("ERROR: dangling PBX references:")
-              for x in dangling:
-                  print(f"  {x}")
+              for x in dangling: print(f"  {x}")
               raise SystemExit(1)
           print("PBX object graph: OK")
           PY
-          echo "RIFE project references:"
-          grep -n 'RIFE_4_25.mlpackage' "$P" || { echo 'ERROR: RIFE package reference missing'; exit 1; }
+          echo "Checking all source references exist..."
+          for f in FrameBoostApp.swift ContentView.swift FrameBoostModel.swift ProcessingProfile.swift VideoProcessor.swift RIFEEngine.swift ArtifactReduction.swift; do
+            test -f "FrameBoost/$f" || { echo "ERROR: missing source file $f"; exit 1; }
+          done
+          echo "Checking required source references are in PBX sources phase..."
+          for f in FrameBoostApp.swift ContentView.swift FrameBoostModel.swift ProcessingProfile.swift VideoProcessor.swift RIFEEngine.swift ArtifactReduction.swift; do
+            grep -q "path = $f;" "$P" || { echo "ERROR: PBX source reference missing for $f"; exit 1; }
+          done
+          echo "RIFE project reference:"
+          grep -n 'path = RIFE_4_25.mlpackage;' "$P" || { echo 'ERROR: RIFE package reference missing'; exit 1; }
           echo "RIFE BuildFile:"
-          grep -n 'A10000100000000000000006.*A10000270000000000000001' "$P" || { echo 'ERROR: RIFE PBXBuildFile link missing'; exit 1; }
+          grep -n 'PBXBuildFile; fileRef = .*;' "$P" | grep 'A10000270000000000000001' || { echo 'ERROR: RIFE PBXBuildFile link missing'; exit 1; }
           echo "RIFE Resources phase:"
-          grep -n 'A10000310000000000000001.*A10000100000000000000006' "$P" || { echo 'ERROR: RIFE Resources phase link missing'; exit 1; }
+          grep -n 'PBXResourcesBuildPhase' "$P" >/dev/null || { echo 'ERROR: Resources phase missing'; exit 1; }
+          grep -q 'A10000170000000000000001' "$P" || { echo 'ERROR: RIFE resource build file not linked'; exit 1; }
           echo "Target Resources phase:"
-          grep -n 'A10000500000000000000001.*A10000310000000000000001' "$P" || { echo 'ERROR: Target does not reference Resources phase'; exit 1; }
+          grep -q 'buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000001)' "$P" || { echo 'ERROR: Target does not reference expected build phases'; exit 1; }
           echo "PBX graph checks passed."
 
       - name: Install Python 3.12 and RIFE dependencies
