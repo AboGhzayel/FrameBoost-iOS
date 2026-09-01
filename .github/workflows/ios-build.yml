@@ -1,4 +1,4 @@
-name: iOS Build
+name: FrameBoost iOS CI
 
 on:
   push:
@@ -8,21 +8,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  swift-validation:
+    name: Swift package validation
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app
-
-      - name: Show toolchain
+      - name: Toolchain
         run: xcodebuild -version
+      - name: Build core package
+        run: swift build -c release
+      - name: Test core package
+        run: swift test -c release
 
-      - name: Validate project structure
+  source-check:
+    name: iOS source checks
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check required sources
         run: |
+          set -e
           test -f FrameBoost/FrameBoostApp.swift
           test -f FrameBoost/ContentView.swift
           test -f FrameBoost/VideoProcessor.swift
+          test -f FrameBoost/InterpolationEngine.swift
+          test -f FrameBoost/VideoPicker.swift
+          test -f FrameBoost/FrameBoostModel.swift
+          test -f FrameBoost/Info.plist
           echo "FrameBoost source structure OK"
