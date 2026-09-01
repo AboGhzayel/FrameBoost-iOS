@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  swift-validation:
-    name: Swift package validation
+  ios-build:
+    name: Build unsigned iOS app
     runs-on: macos-15
     steps:
       - name: Checkout
@@ -18,25 +18,42 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_16.4.app
       - name: Toolchain
         run: xcodebuild -version
-      - name: Build core package
-        run: swift build -c release
-      - name: Test core package
-        run: swift test -c release
+      - name: Build unsigned app
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project FrameBoost/FrameBoost.xcodeproj \
+            -scheme FrameBoost \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee build.log
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          APP_PATH="build/Build/Products/Release-iphoneos/FrameBoost.app"
+          test -d "$APP_PATH"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/FrameBoost.app
+          /usr/bin/zip -qry FrameBoost-unsigned.ipa Payload
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameBoost-unsigned-ipa
+          path: FrameBoost-unsigned.ipa
+          if-no-files-found: error
 
-  source-check:
-    name: iOS source checks
+  swift-validation:
+    name: Swift package validation
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Check required sources
-        run: |
-          set -e
-          test -f FrameBoost/FrameBoostApp.swift
-          test -f FrameBoost/ContentView.swift
-          test -f FrameBoost/VideoProcessor.swift
-          test -f FrameBoost/InterpolationEngine.swift
-          test -f FrameBoost/VideoPicker.swift
-          test -f FrameBoost/FrameBoostModel.swift
-          test -f FrameBoost/Info.plist
-          echo "FrameBoost source structure OK"
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+      - name: Build core package
+        run: swift build -c release
+      - name: Test core package
+        run: swift test -c release
