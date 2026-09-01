@@ -52,7 +52,7 @@ def main() -> None:
         inputs=[ct.TensorType(name="frames", shape=(1, 6, 256, 256), dtype=np.float32)],
         outputs=[ct.TensorType(name="frame", dtype=np.float32)],
         compute_precision=ct.precision.FLOAT16,
-        minimum_deployment_target=ct.target.iOS18,
+        minimum_deployment_target=ct.target.iOS26,
     )
     mlmodel.author = "FrameBoost / RIFE v4.25"
     mlmodel.short_description = "RIFE 2x frame interpolation; 6-channel RGB pair to intermediate RGB frame"
