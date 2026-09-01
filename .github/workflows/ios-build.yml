@@ -7,43 +7,86 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  SCHEME: FrameBoost
+  PROJECT: FrameBoost/FrameBoost.xcodeproj
+  BUNDLE_ID: com.aboghzayel.FrameBoost
+
 jobs:
   ios-build:
-    name: Build unsigned iOS app
+    name: Build clean unsigned IPA
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
-      - name: Toolchain
-        run: xcodebuild -version
-      - name: Build unsigned app
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project FrameBoost/FrameBoost.xcodeproj \
-            -scheme FrameBoost \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build | tee build.log
-      - name: Package unsigned IPA
         run: |
           set -e
-          APP_PATH="build/Build/Products/Release-iphoneos/FrameBoost.app"
-          test -d "$APP_PATH"
+          if [ -d /Applications/Xcode_16.4.app ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app
+          else
+            echo "Using preselected Xcode"
+          fi
+          xcodebuild -version
+
+      - name: Clean build
+        run: |
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
+            clean build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Validate app bundle
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" | grep -Fx "FrameBoost"
+          file "$APP/FrameBoost"
+          lipo -info "$APP/FrameBoost" | grep -q arm64
+          echo "App bundle validation passed"
+
+      - name: Package clean IPA for ESign re-signing
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
+          rm -rf Payload FrameBoost-unsigned.ipa
           mkdir -p Payload
-          cp -R "$APP_PATH" Payload/FrameBoost.app
-          /usr/bin/zip -qry FrameBoost-unsigned.ipa Payload
-      - name: Upload IPA artifact
+          cp -R "$APP" Payload/FrameBoost.app
+          # This IPA is intentionally unsigned. ESign must apply the certificate
+          # and provisioning profile before installation on a physical device.
+          /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
+          rm -rf Payload
+          unzip -t FrameBoost-unsigned.ipa
+
+      - name: Verify IPA layout
+        run: |
+          set -euo pipefail
+          rm -rf ipa-check
+          mkdir ipa-check
+          unzip -q FrameBoost-unsigned.ipa -d ipa-check
+          test -d ipa-check/Payload/FrameBoost.app
+          test -f ipa-check/Payload/FrameBoost.app/Info.plist
+          test ! -e ipa-check/__MACOSX
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" ipa-check/Payload/FrameBoost.app/Info.plist | grep -Fx "$BUNDLE_ID"
+          echo "IPA layout is clean"
+
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: FrameBoost-unsigned-ipa
           path: FrameBoost-unsigned.ipa
           if-no-files-found: error
+          retention-days: 14
 
   swift-validation:
     name: Swift package validation
@@ -52,7 +95,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+        run: |
+          if [ -d /Applications/Xcode_16.4.app ]; then sudo xcode-select -s /Applications/Xcode_16.4.app; fi
       - name: Build core package
         run: swift build -c release
       - name: Test core package
