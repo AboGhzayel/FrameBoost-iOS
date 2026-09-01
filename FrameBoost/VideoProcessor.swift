@@ -29,8 +29,8 @@ final class VideoProcessor {
         let naturalSize = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
         let nominal = try await track.load(.nominalFrameRate)
-        let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
-        let fps = max(Double(options.targetFPS), ceil(sourceFPS))
+        let sourceFPS = nominal > 0 ? Double(nominal) : 60.0
+        let fps = 60.0
         let oriented = naturalSize.applying(transform)
         let sourceWidth = even(max(Int(abs(oriented.width).rounded()), 2))
         let sourceHeight = even(max(Int(abs(oriented.height).rounded()), 2))
@@ -62,42 +62,44 @@ final class VideoProcessor {
             if let previous {
                 let delta = CMTimeGetSeconds(time - previous.time)
                 if delta > 0.0001 && delta < 1.0 {
-                    let count = min(max(Int((delta * fps).rounded()), 1), 8)
-                    let cropRect = CGRect(x: 0, y: 0, width: CGFloat(sourceWidth), height: CGFloat(sourceHeight))
-                    let previousImage = previous.image.cropped(to: cropRect)
-                    let currentImage = current.image.cropped(to: cropRect)
-                    if previous.time > lastWrittenTime { try await append(previousImage, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR); lastWrittenTime = previous.time }
-                    if count > 1 {
-                        let motion: OpticalFlowEngine.Motion?
-                        if sourceWidth <= 1920 && sourceHeight <= 1080 {
-                            motion = autoreleasepool { try? opticalFlow.estimate(from: previous.pixelBuffer, to: current.pixelBuffer) }
-                        } else { motion = nil }
-                        for i in 1..<count {
-                            try Task.checkCancellation()
-                            let f = CGFloat(i) / CGFloat(count)
-                            let candidate = CMTimeAdd(previous.time, CMTimeMultiplyByFloat64(time - previous.time, multiplier: Double(f)))
-                            guard candidate > lastWrittenTime else { continue }
-                            var intermediate = makeIntermediate(previous: previousImage, current: currentImage, motion: motion, fraction: f)
-                            if options.motionBlur, options.motionBlurStrength > 0, let motion {
-                                intermediate = applySmartMotionBlur(to: intermediate, motion: motion, strength: options.motionBlurStrength)
+                    // 60 FPS is the only output mode. Never create extra frames
+                    // when the source is already 60 FPS: preserve its timestamps.
+                    if sourceFPS >= 59.0 {
+                        if previous.time > lastWrittenTime {
+                            try await append(previous.image, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height)
+                            lastWrittenTime = previous.time
+                        }
+                    } else {
+                        // Non-60 input is normalized to a 60 FPS timeline. Optical-flow
+                        // generation remains bounded to one interval at a time.
+                        let count = min(max(Int((delta * fps).rounded()), 1), 8)
+                        if previous.time > lastWrittenTime {
+                            try await append(previous.image, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height)
+                            lastWrittenTime = previous.time
+                        }
+                        if count > 1 {
+                            let motion = autoreleasepool { try? opticalFlow.estimate(from: previous.pixelBuffer, to: current.pixelBuffer) }
+                            for i in 1..<count {
+                                let f = CGFloat(i) / CGFloat(count)
+                                let candidate = CMTimeAdd(previous.time, CMTimeMultiplyByFloat64(time - previous.time, multiplier: Double(f)))
+                                guard candidate > lastWrittenTime else { continue }
+                                let intermediate = makeIntermediate(previous: previous.image, current: current.image, motion: motion, fraction: f)
+                                try await append(intermediate, at: candidate, adaptor: adaptor, writer: writer, width: width, height: height)
+                                lastWrittenTime = candidate
                             }
-                            try await append(intermediate, at: candidate, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR)
-                            lastWrittenTime = candidate
                         }
                     }
                 }
             } else {
-                try await append(current.image, at: .zero, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR)
+                try await append(current.image, at: .zero, adaptor: adaptor, writer: writer, width: width, height: height)
                 lastWrittenTime = .zero
             }
             previous = current
             progress(min(max(CMTimeGetSeconds(time) / durationSeconds, 0), 1))
         }
         if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
-        if let previous {
-            let oneFrame = CMTime(value: 1, timescale: CMTimeScale(max(Int(fps.rounded()), 1)))
-            let finalTime = previous.time > lastWrittenTime ? previous.time : CMTimeAdd(lastWrittenTime, oneFrame)
-            try await append(previous.image, at: finalTime, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR)
+        if let previous, previous.time > lastWrittenTime {
+            try await append(previous.image, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height)
         }
         input.markAsFinished()
         await writer.finishWriting()
@@ -114,31 +116,19 @@ final class VideoProcessor {
         return dissolve(a, b, fraction: f)
     }
 
-    private func applySmartMotionBlur(to image: CIImage, motion: OpticalFlowEngine.Motion, strength: CGFloat) -> CIImage {
-        let radius = min(max((abs(motion.dx) + abs(motion.dy)) * strength * 0.08, 0), 12)
-        guard radius > 0.05 else { return image }
-        let filter = CIFilter(name: "CIMotionBlur")
-        filter?.setValue(image, forKey: kCIInputImageKey)
-        filter?.setValue(radius, forKey: kCIInputRadiusKey)
-        filter?.setValue(atan2(motion.dy, motion.dx) * 180 / .pi, forKey: kCIInputAngleKey)
-        return filter?.outputImage ?? image
-    }
-
     private func dissolve(_ a: CIImage, _ b: CIImage, fraction: CGFloat) -> CIImage {
         let filter = CIFilter(name: "CIDissolveTransition")!
-        filter.setValue(a, forKey: kCIInputImageKey)
-        filter.setValue(b, forKey: kCIInputTargetImageKey)
+        filter.setValue(a, forKey: kCIInputImageKey); filter.setValue(b, forKey: kCIInputTargetImageKey)
         filter.setValue(min(max(fraction, 0), 1), forKey: kCIInputTimeKey)
         return filter.outputImage ?? b
     }
 
     private func normalizedImage(_ image: CIImage, transform: CGAffineTransform) -> CIImage {
-        let transformed = image.transformed(by: transform)
-        let e = transformed.extent
+        let transformed = image.transformed(by: transform); let e = transformed.extent
         return transformed.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
     }
 
-    private func append(_ image: CIImage, at time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter, width: Int, height: Int, forceSDR: Bool) async throws {
+    private func append(_ image: CIImage, at time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter, width: Int, height: Int) async throws {
         while !adaptor.assetWriterInput.isReadyForMoreMediaData {
             try Task.checkCancellation()
             if writer.status == .failed || writer.status == .cancelled { throw writer.error ?? makeError("Video writer stopped") }
@@ -147,10 +137,8 @@ final class VideoProcessor {
         guard let pool = adaptor.pixelBufferPool else { throw makeError("Pixel buffer pool unavailable") }
         var buffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer else { throw makeError("Unable to allocate video frame") }
-        let e = image.extent
-        let normalized = image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
-        let sx = CGFloat(width) / max(normalized.extent.width, 1)
-        let sy = CGFloat(height) / max(normalized.extent.height, 1)
+        let e = image.extent; let normalized = image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
+        let sx = CGFloat(width) / max(normalized.extent.width, 1); let sy = CGFloat(height) / max(normalized.extent.height, 1)
         let finalImage = normalized.transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
         context.render(finalImage, to: buffer)
         guard adaptor.append(buffer, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append video frame") }
@@ -165,26 +153,15 @@ private final class OpticalFlowEngine {
     struct Motion { let dx: CGFloat; let dy: CGFloat }
     func estimate(from source: CVPixelBuffer, to target: CVPixelBuffer) throws -> Motion {
         guard CVPixelBufferGetWidth(source) == CVPixelBufferGetWidth(target), CVPixelBufferGetHeight(source) == CVPixelBufferGetHeight(target) else { throw NSError(domain: "FrameBoost.OpticalFlow", code: 1, userInfo: [NSLocalizedDescriptionKey: "Optical-flow frames have different dimensions"]) }
-        let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: target, options: [:])
-        request.computationAccuracy = .medium
-        request.outputPixelFormat = kCVPixelFormatType_TwoComponent32Float
-        let handler = VNImageRequestHandler(cvPixelBuffer: source, options: [:])
-        try handler.perform([request])
+        let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: target, options: [:]); request.computationAccuracy = .medium; request.outputPixelFormat = kCVPixelFormatType_TwoComponent32Float
+        let handler = VNImageRequestHandler(cvPixelBuffer: source, options: [:]); try handler.perform([request])
         guard let observation = request.results?.first as? VNPixelBufferObservation else { return Motion(dx: 0, dy: 0) }
-        let flow = observation.pixelBuffer
-        CVPixelBufferLockBaseAddress(flow, .readOnly); defer { CVPixelBufferUnlockBaseAddress(flow, .readOnly) }
+        let flow = observation.pixelBuffer; CVPixelBufferLockBaseAddress(flow, .readOnly); defer { CVPixelBufferUnlockBaseAddress(flow, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(flow) else { return Motion(dx: 0, dy: 0) }
-        let fw = CVPixelBufferGetWidth(flow); let fh = CVPixelBufferGetHeight(flow)
-        let rowStride = CVPixelBufferGetBytesPerRow(flow) / MemoryLayout<Float>.size
-        let values = base.assumingMemoryBound(to: Float.self)
-        var xs: [Float] = []; var ys: [Float] = []
+        let fw = CVPixelBufferGetWidth(flow); let fh = CVPixelBufferGetHeight(flow); let rowStride = CVPixelBufferGetBytesPerRow(flow) / MemoryLayout<Float>.size
+        let values = base.assumingMemoryBound(to: Float.self); var xs: [Float] = []; var ys: [Float] = []
         let stepX = max(fw / 16, 1); let stepY = max(fh / 16, 1)
-        for y in Swift.stride(from: stepY / 2, to: fh, by: stepY) {
-            for x in Swift.stride(from: stepX / 2, to: fw, by: stepX) {
-                let index = y * rowStride + x * 2; let dx = values[index]; let dy = values[index + 1]
-                if dx.isFinite && dy.isFinite && abs(dx) < 256 && abs(dy) < 256 { xs.append(dx); ys.append(dy) }
-            }
-        }
+        for y in Swift.stride(from: stepY / 2, to: fh, by: stepY) { for x in Swift.stride(from: stepX / 2, to: fw, by: stepX) { let index = y * rowStride + x * 2; let dx = values[index]; let dy = values[index + 1]; if dx.isFinite && dy.isFinite && abs(dx) < 256 && abs(dy) < 256 { xs.append(dx); ys.append(dy) } } }
         guard !xs.isEmpty else { return Motion(dx: 0, dy: 0) }
         xs.sort(); ys.sort(); let trim = xs.count / 10; let lo = trim; let hi = max(xs.count - trim, lo + 1)
         return Motion(dx: CGFloat(xs[lo..<hi].reduce(0, +) / Float(hi - lo)), dy: CGFloat(ys[lo..<hi].reduce(0, +) / Float(hi - lo)))
