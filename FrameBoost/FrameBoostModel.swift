@@ -21,6 +21,7 @@ final class FrameBoostModel: ObservableObject {
 
     func process() async {
         guard let input = selectedVideoURL, !isProcessing else { return }
+        let targetFPS = settings.targetFPS
         isProcessing = true
         progress = 0
         errorMessage = nil
@@ -29,9 +30,9 @@ final class FrameBoostModel: ObservableObject {
         do {
             let result = try await processor.process(
                 url: input,
-                targetFPS: settings.targetFPS,
+                targetFPS: targetFPS,
                 progress: { [weak self] value in
-                    Task { @MainActor [weak self] in
+                    Task { @MainActor in
                         self?.progress = value
                     }
                 }
@@ -50,7 +51,7 @@ final class FrameBoostModel: ObservableObject {
 
     func startProcessing() {
         guard processingTask == nil else { return }
-        processingTask = Task { [weak self] in
+        processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.process()
         }
