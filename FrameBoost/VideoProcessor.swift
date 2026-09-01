@@ -15,6 +15,7 @@ struct VideoProcessingOptions: Sendable {
 final class VideoProcessor {
     private let context = CIContext(options: [CIContextOption.cacheIntermediates: false])
     private let rife = RIFEEngine()
+    private let artifactReduction = ArtifactReduction()
 
     func process(url: URL, targetFPS: Int, progress: @escaping (Double) -> Void) async throws -> URL {
         try await process(url: url, options: VideoProcessingOptions(targetFPS: targetFPS), progress: progress)
@@ -72,7 +73,6 @@ final class VideoProcessor {
 
         var previousBuffer: CVPixelBuffer?
         var previousTime = CMTime.invalid
-        var frameIndex = 0
 
         while let sample = readerOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
@@ -85,22 +85,24 @@ final class VideoProcessor {
                     if sourceFPS >= 59.0 {
                         try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
                     } else if sourceFPS >= 20.0 {
-                        if let previousBuffer, previousTime.isValid, time > previousTime, rife.isAvailable {
-                            do {
-                                let generated = try rife.interpolate(first: previousBuffer, second: buffer)
-                                let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5))
-                                try appendSync(CIImage(cvPixelBuffer: generated), at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height)
-                            } catch {
-                                // Safe fallback to source frame.
-                            }
+                        guard let previousBuffer, previousTime.isValid, time > previousTime else {
+                            try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
+                            previousBuffer = buffer
+                            previousTime = time
+                            progress(min(max(CMTimeGetSeconds(time) / durationSeconds, 0), 1))
+                            return
                         }
+                        guard rife.isAvailable else { throw makeError("RIFE Core ML model is unavailable; 30→60 requires the bundled model") }
+                        let generated = try rife.interpolate(first: previousBuffer, second: buffer)
+                        let stabilized = artifactReduction.stabilize(generated: generated, first: previousBuffer, second: buffer) ?? generated
+                        let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5))
+                        try appendSync(CIImage(cvPixelBuffer: stabilized), at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height)
                         try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
                     } else {
                         throw makeError("Unsupported source frame rate")
                     }
                     previousBuffer = buffer
                     previousTime = time
-                    frameIndex += 1
                 } catch let caughtError {
                     processingError = caughtError
                 }
