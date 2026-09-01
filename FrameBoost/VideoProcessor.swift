@@ -27,7 +27,8 @@ final class VideoProcessor: ObservableObject {
 
         do {
             let asset = AVURLAsset(url: inputURL)
-            guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            let videoTracks = try await asset.loadTracks(withMediaType: .video)
+            guard let videoTrack = videoTracks.first else {
                 throw ProcessorError.message("No video track was found.")
             }
 
@@ -35,9 +36,6 @@ final class VideoProcessor: ObservableObject {
             let durationSeconds = max(CMTimeGetSeconds(duration), 0.001)
             let naturalSize = try await videoTrack.load(.naturalSize)
             let transform = try await videoTrack.load(.preferredTransform)
-            let nominalFPS = try await videoTrack.load(.nominalFrameRate)
-            let sourceFPS = nominalFPS > 0 ? Double(nominalFPS) : 30
-            let _ = sourceFPS
 
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4")
@@ -59,7 +57,8 @@ final class VideoProcessor: ObservableObject {
                 return nil
             }
 
-            guard preserveAudio, try await asset.loadTracks(withMediaType: .audio).first != nil else {
+            let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            guard preserveAudio, !audioTracks.isEmpty else {
                 progress = 1
                 progressHandler(1)
                 return outputURL
@@ -256,9 +255,9 @@ final class VideoProcessor: ObservableObject {
 
     private func muxOriginalAudio(videoURL: URL, sourceAsset: AVAsset, outputURL: URL) async throws {
         let processedAsset = AVURLAsset(url: videoURL)
-        guard let videoTrack = try await processedAsset.loadTracks(withMediaType: .video),
-              let processedVideo = videoTrack.first,
-              let sourceAudio = try await sourceAsset.loadTracks(withMediaType: .audio)?.first else {
+        let videoTracks = try await processedAsset.loadTracks(withMediaType: .video)
+        let audioTracks = try await sourceAsset.loadTracks(withMediaType: .audio)
+        guard let processedVideo = videoTracks.first, let sourceAudio = audioTracks.first else {
             throw ProcessorError.message("Unable to prepare audio.")
         }
 
