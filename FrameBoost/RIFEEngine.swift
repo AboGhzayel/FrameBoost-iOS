@@ -103,7 +103,7 @@ final class RIFEEngine {
     }
 
     private func makeInput(base0: UnsafeMutableRawPointer, base1: UnsafeMutableRawPointer, row0: Int, row1: Int, width: Int, height: Int, x: Int, y: Int) throws -> MLMultiArray {
-        let input = try MLMultiArray(shape: [1, 6, tile, tile], dataType: .float32)
+        let input = try MLMultiArray(shape: [1, 6, tile, tile] as [NSNumber], dataType: .float32)
         let ptr = input.dataPointer.assumingMemoryBound(to: Float.self)
         let plane = tile * tile
         let p0 = base0.assumingMemoryBound(to: UInt8.self)
