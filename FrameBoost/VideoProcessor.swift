@@ -31,7 +31,7 @@ final class VideoProcessor {
     }
 
     func preprocess(url: URL, profile: PreprocessingProfile, progress: @escaping (Double) -> Void) async throws -> URL {
-        let asset = AVAsset(url: url)
+        let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
         let sourceFPS = try await track.load(.nominalFrameRate)
         let fps = max(Int(sourceFPS.rounded()), 1)
@@ -41,7 +41,7 @@ final class VideoProcessor {
     }
 
     private func reencode(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
-        let asset = AVAsset(url: url)
+        let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
         let duration = max(CMTimeGetSeconds(try await asset.load(.duration)), 0.001)
         let sourceFPS = try await track.load(.nominalFrameRate)
@@ -51,14 +51,14 @@ final class VideoProcessor {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-Preprocessed-\(UUID().uuidString).mp4")
         let reader = try AVAssetReader(asset: asset)
         let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA])
-        ro.alwaysCopiesSampleData = false
+        ro.alwaysCopiesSampleData = true
         reader.add(ro)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         let fps = max(Int(sourceFPS.rounded()), 1)
         let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, AVVideoExpectedSourceFrameRateKey: fps, AVVideoMaxKeyFrameIntervalKey: fps * 2]
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
         input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA, String(kCVPixelBufferWidthKey): width, String(kCVPixelBufferHeightKey): height])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA, String(kCVPixelBufferWidthKey): width, String(kCVPixelBufferHeightKey): height, String(kCVPixelBufferIOSurfacePropertiesKey): [:]])
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start preprocessing export") }
         writer.startSession(atSourceTime: .zero)
@@ -78,6 +78,7 @@ final class VideoProcessor {
             guard adaptor.append(out, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append preprocessing frame") }
             progress(min(max(CMTimeGetSeconds(time) / duration, 0), 1))
         }
+        if reader.status == .failed { throw reader.error ?? makeError("Preprocessing reader failed") }
         input.markAsFinished()
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? makeError("Preprocessing export failed") }
@@ -86,7 +87,7 @@ final class VideoProcessor {
     }
 
     func process(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
-        let asset = AVAsset(url: url)
+        let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
         let duration = max(CMTimeGetSeconds(try await asset.load(.duration)), 0.001)
         let nominal = try await track.load(.nominalFrameRate)
@@ -103,7 +104,7 @@ final class VideoProcessor {
 
         let reader = try AVAssetReader(asset: asset)
         let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA])
-        ro.alwaysCopiesSampleData = false
+        ro.alwaysCopiesSampleData = true
         reader.add(ro)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         let exportFPS = max(options.targetFPS, 1)
@@ -112,7 +113,7 @@ final class VideoProcessor {
         if let profile { compression[AVVideoProfileLevelKey] = profile }
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: options.codec, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
         input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA, String(kCVPixelBufferWidthKey): width, String(kCVPixelBufferHeightKey): height])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA, String(kCVPixelBufferWidthKey): width, String(kCVPixelBufferHeightKey): height, String(kCVPixelBufferIOSurfacePropertiesKey): [:]])
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video export") }
         writer.startSession(atSourceTime: .zero)
@@ -148,6 +149,7 @@ final class VideoProcessor {
             progress(min(max(CMTimeGetSeconds(time) / duration, 0), 1))
             if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
         }
+        if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
         input.markAsFinished()
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }
@@ -171,14 +173,16 @@ final class VideoProcessor {
     private func renderAspectFill(_ image: CIImage, to output: CVPixelBuffer, width: Int, height: Int, context: CIContext) {
         let extent = image.extent.integral
         guard extent.width > 0, extent.height > 0 else { return }
-        // Aspect-fill keeps geometry correct. For a 9:16 export, the excess sides/top are cropped rather than stretched.
         let scale = max(CGFloat(width) / extent.width, CGFloat(height) / extent.height)
         let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let scaledExtent = scaled.extent
-        let x = scaledExtent.midX - CGFloat(width) / 2
-        let y = scaledExtent.midY - CGFloat(height) / 2
-        let crop = CGRect(x: x, y: y, width: CGFloat(width), height: CGFloat(height))
-        context.render(scaled.cropped(to: crop), to: output, bounds: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)), colorSpace: nil)
+        let crop = CGRect(x: scaledExtent.midX - CGFloat(width) / 2, y: scaledExtent.midY - CGFloat(height) / 2, width: CGFloat(width), height: CGFloat(height))
+        // CIImage can retain a non-zero origin after cropping. Normalize the
+        // crop to (0,0) before rendering into the pixel buffer; otherwise the
+        // requested bounds may not intersect the image and the destination can
+        // remain black.
+        let normalized = scaled.cropped(to: crop).transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+        context.render(normalized, to: output, bounds: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)), colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
     }
 
     private func even(_ value: Int) -> Int { value % 2 == 0 ? value : value - 1 }
