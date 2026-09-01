@@ -1,40 +1,36 @@
 import Foundation
 import CoreImage
-import CoreVideo
 
 struct MotionBlurEngine: Sendable {
-    /// Blends the previous and current frame with a controllable temporal weight.
-    /// Designed as a lightweight Core Image stage before encoding.
+    /// Lightweight temporal blend between consecutive frames.
+    /// A Metal-backed kernel can replace this implementation later without changing the queue API.
     func blend(previous: CIImage, current: CIImage, strength: CGFloat) -> CIImage {
         let amount = min(max(strength, 0), 0.45)
         guard amount > 0 else { return current }
-        let previousPremultiplied = previous.applyingFilter("CIPremultiplyAlpha")
-        let currentPremultiplied = current.applyingFilter("CIPremultiplyAlpha")
-        let previousWeighted = previousPremultiplied.applyingFilter("CIColorMatrix", parameters: [
+        let weightedPrevious = previous.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount),
-            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount)
         ])
-        return currentPremultiplied.applyingFilter("CISourceOverCompositing", parameters: [kCIInputBackgroundImageKey: previousWeighted])
+        return current.applyingFilter("CISourceOverCompositing", parameters: [kCIInputBackgroundImageKey: weightedPrevious])
     }
 }
 
 enum VideoQueueState: Sendable {
-    case queued, processing, completed, failed
+    case queued, processing, completed, failed, cancelled
 }
 
 final class VideoProcessingQueue {
     static let shared = VideoProcessingQueue(maxConcurrentOperations: 1)
 
-    private let queue: OperationQueue
+    private let queue = OperationQueue()
     private let lock = NSLock()
     private var states: [UUID: VideoQueueState] = [:]
+    private var operations: [UUID: Operation] = [:]
     private var errors: [UUID: Error] = [:]
 
     init(maxConcurrentOperations: Int = 1) {
-        queue = OperationQueue()
         queue.name = "com.frameboost.video-processing"
         queue.qualityOfService = .userInitiated
         queue.maxConcurrentOperationCount = max(1, maxConcurrentOperations)
@@ -44,31 +40,60 @@ final class VideoProcessingQueue {
     func enqueue(url: URL, processor: VideoProcessor, targetFPS: Int, progress: @escaping (Double) -> Void, completion: @escaping (Result<URL, Error>) -> Void) -> UUID {
         let id = UUID()
         setState(.queued, for: id)
+
         let operation = BlockOperation { [weak self] in
             guard let self else { return }
+            if self.isCancelled(id) { return }
             self.setState(.processing, for: id)
-            Task {
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var result: Result<URL, Error>?
+            let task = Task {
                 do {
-                    let result = try await processor.process(url: url, targetFPS: targetFPS, progress: progress)
-                    guard !operation.isCancelled else { return }
-                    self.setState(.completed, for: id)
-                    completion(.success(result))
+                    let output = try await processor.process(url: url, targetFPS: targetFPS, progress: progress)
+                    result = .success(output)
                 } catch {
-                    self.lock.lock(); self.errors[id] = error; self.lock.unlock()
-                    self.setState(.failed, for: id)
-                    completion(.failure(error))
+                    result = .failure(error)
+                }
+                semaphore.signal()
+            }
+
+            while semaphore.wait(timeout: .now() + 0.1) == .timedOut {
+                if self.isCancelled(id) {
+                    task.cancel()
+                    semaphore.wait()
+                    self.setState(.cancelled, for: id)
+                    return
                 }
             }
+
+            if self.isCancelled(id) {
+                self.setState(.cancelled, for: id)
+                return
+            }
+            guard let result else { return }
+            switch result {
+            case .success(let output):
+                self.setState(.completed, for: id)
+                completion(.success(output))
+            case .failure(let error):
+                self.lock.lock(); self.errors[id] = error; self.lock.unlock()
+                self.setState(.failed, for: id)
+                completion(.failure(error))
+            }
         }
+
+        lock.lock(); operations[id] = operation; lock.unlock()
         queue.addOperation(operation)
         return id
     }
 
     func cancel(_ id: UUID) {
-        // Operation cancellation is intentionally exposed as a queue-level API;
-        // callers can also cancel all work when leaving the processing screen.
-        // The underlying async processor checks Task cancellation between frames.
-        setState(.failed, for: id)
+        lock.lock()
+        let operation = operations[id]
+        lock.unlock()
+        operation?.cancel()
+        setState(.cancelled, for: id)
     }
 
     func state(for id: UUID) -> VideoQueueState? {
@@ -83,6 +108,15 @@ final class VideoProcessingQueue {
 
     func cancelAll() {
         queue.cancelAllOperations()
+        lock.lock()
+        let ids = Array(operations.keys)
+        lock.unlock()
+        ids.forEach { setState(.cancelled, for: $0) }
+    }
+
+    private func isCancelled(_ id: UUID) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return operations[id]?.isCancelled == true || states[id] == .cancelled
     }
 
     private func setState(_ state: VideoQueueState, for id: UUID) {
