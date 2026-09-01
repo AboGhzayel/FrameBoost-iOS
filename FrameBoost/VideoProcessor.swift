@@ -10,6 +10,12 @@ struct VideoProcessingOptions: Sendable {
     var forceSDR: Bool = false
     var motionBlur: Bool = false
     var motionBlurStrength: CGFloat = 0.0
+    var codec: AVVideoCodecType = .h264
+    var profileLevel: String = AVVideoProfileLevelH264HighAutoLevel
+    var preserveSourceFPS: Bool = true
+    var colorPrimaries: String = AVVideoColorPrimaries_ITU_R_709_2
+    var transferFunction: String = AVVideoTransferFunction_ITU_R_709_2
+    var yCbCrMatrix: String = AVVideoYCbCrMatrix_ITU_R_709_2
 }
 
 final class VideoProcessor {
@@ -21,149 +27,93 @@ final class VideoProcessor {
         try await process(url: url, options: VideoProcessingOptions(targetFPS: targetFPS), progress: progress)
     }
 
-    /// Re-encodes the source locally before AI upload/processing. This keeps cloud uploads
-    /// predictable and gives the AI a clean, constant-frame-rate input.
     func preprocess(url: URL, profile: PreprocessingProfile, progress: @escaping (Double) -> Void) async throws -> URL {
-        if profile == .motionBlur {
-            return try await reencode(url: url, bitrate: profile.bitrate, frameRate: profile.frameRate, temporalBlend: profile.blurStrength, progress: progress)
-        }
-        return try await reencode(url: url, bitrate: profile.bitrate, frameRate: profile.frameRate, temporalBlend: 0, progress: progress)
+        let asset = AVAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
+        let sourceFPS = try await track.load(.nominalFrameRate)
+        let fps = max(Int(sourceFPS.rounded()), 1)
+        var options = VideoProcessingOptions(targetFPS: fps, bitrate: profile.bitrate)
+        options.codec = .h264
+        options.profileLevel = AVVideoProfileLevelH264HighAutoLevel
+        options.preserveSourceFPS = true
+        if profile == .motionBlur { options.motionBlur = true; options.motionBlurStrength = CGFloat(profile.blurStrength) }
+        return try await reencode(url: url, options: options, progress: progress)
     }
 
-    private func reencode(url: URL, bitrate: Int, frameRate: Int, temporalBlend: Float, progress: @escaping (Double) -> Void) async throws -> URL {
+    private func reencode(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
         let asset = AVAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
         let duration = max(CMTimeGetSeconds(try await asset.load(.duration)), 0.001)
+        let sourceFPS = try await track.load(.nominalFrameRate)
+        guard sourceFPS > 0 else { throw makeError("Source video has no valid frame rate") }
         let size = try await track.load(.naturalSize).applying(try await track.load(.preferredTransform))
-        let width = even(max(Int(abs(size.width.rounded())), 2))
-        let height = even(max(Int(abs(size.height.rounded())), 2))
+        let width = even(max(Int(abs(size.width.rounded())), 2)); let height = even(max(Int(abs(size.height.rounded())), 2))
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-Preprocessed-\(UUID().uuidString).mp4")
-
-        let reader = try AVAssetReader(asset: asset)
-        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
-        ])
-        readerOutput.alwaysCopiesSampleData = false
-        reader.add(readerOutput)
-
-        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let compression: [String: Any] = [
-            AVVideoAverageBitRateKey: bitrate,
-            AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-            AVVideoExpectedSourceFrameRateKey: frameRate,
-            AVVideoMaxKeyFrameIntervalKey: frameRate * 2
-        ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: compression
-        ])
-        input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: width,
-            kCVPixelBufferHeightKey as String: height,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
-        ])
-        writer.add(input)
-        guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start preprocessing export") }
-        writer.startSession(atSourceTime: .zero)
-        guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read source") }
-
-        var previous: CIImage?
-        var nextOutputTime = CMTime.zero
-        let outputFrameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
-        while let sample = readerOutput.copyNextSampleBuffer() {
-            try Task.checkCancellation()
-            guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-            let sourceTime = CMSampleBufferGetPresentationTimeStamp(sample)
-            autoreleasepool {
-                let image = CIImage(cvPixelBuffer: buffer)
-                var prepared = image
-                if let previous, temporalBlend > 0 {
-                    prepared = image.applyingFilter("CISourceOverCompositing", parameters: [kCIInputBackgroundImageKey: previous])
-                    prepared = prepared.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.0])
-                }
-                do {
-                    try appendSync(prepared, at: nextOutputTime, adaptor: adaptor, writer: writer, width: width, height: height)
-                } catch { reader.cancelReading(); writer.cancelWriting() }
-                previous = image
-                nextOutputTime = nextOutputTime + outputFrameDuration
-            }
-            progress(min(max(CMTimeGetSeconds(sourceTime) / duration, 0), 1))
-        }
-        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Preprocessing reader failed") }
-        input.markAsFinished(); await writer.finishWriting()
-        guard writer.status == .completed else { throw writer.error ?? makeError("Preprocessing export failed") }
-        progress(1)
-        return outputURL
-    }
-
-    func process(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
-        let asset = AVAsset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
-        let duration = try await asset.load(.duration)
-        let durationSeconds = max(CMTimeGetSeconds(duration), 0.001)
-        let naturalSize = try await track.load(.naturalSize)
-        let nominal = try await track.load(.nominalFrameRate)
-        let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
-        let oriented = naturalSize.applying(try await track.load(.preferredTransform))
-        let sourceWidth = even(max(Int(abs(oriented.width).rounded()), 2))
-        let sourceHeight = even(max(Int(abs(oriented.height).rounded()), 2))
-        let width = even(max(options.exportWidth ?? sourceWidth, 2))
-        let height = even(max(options.exportHeight ?? sourceHeight, 2))
-        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4")
-        var completed = false
-        defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
-
         let reader = try AVAssetReader(asset: asset)
         let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         readerOutput.alwaysCopiesSampleData = false; reader.add(readerOutput)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, AVVideoMaxKeyFrameIntervalKey: 120, AVVideoExpectedSourceFrameRateKey: 60]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
+        let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: options.profileLevel, AVVideoExpectedSourceFrameRateKey: Int(sourceFPS.rounded()), AVVideoMaxKeyFrameIntervalKey: max(Int(sourceFPS.rounded()) * 2, 2), AVVideoAllowFrameReorderingKey: true, AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: options.colorPrimaries, AVVideoTransferFunctionKey: options.transferFunction, AVVideoYCbCrMatrixKey: options.yCbCrMatrix]]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: options.codec, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
         input.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
-        writer.add(input); guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video export") }; writer.startSession(atSourceTime: .zero)
-        guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read selected video") }
-        var previousBuffer: CVPixelBuffer?; var previousTime = CMTime.invalid
+        writer.add(input); guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start preprocessing export") }; writer.startSession(atSourceTime: .zero)
+        guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read source") }
+        var previous: CIImage?
+        var nextTime = CMTime.zero
+        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(Int(sourceFPS.rounded()), 1)))
         while let sample = readerOutput.copyNextSampleBuffer() {
             try Task.checkCancellation(); guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-            let time = CMSampleBufferGetPresentationTimeStamp(sample); var processingError: Error?
+            let sourceTime = CMSampleBufferGetPresentationTimeStamp(sample)
+            var image = CIImage(cvPixelBuffer: buffer)
+            if let previous, options.motionBlur {
+                let alpha = max(0.0, min(0.35, options.motionBlurStrength))
+                image = image.applyingFilter("CISourceOverCompositing", parameters: [kCIInputBackgroundImageKey: previous.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(alpha))])])
+            }
+            try appendSync(image, at: nextTime, adaptor: adaptor, writer: writer, width: width, height: height)
+            previous = CIImage(cvPixelBuffer: buffer); nextTime = nextTime + frameDuration
+            progress(min(max(CMTimeGetSeconds(sourceTime) / duration, 0), 1))
+        }
+        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Preprocessing reader failed") }
+        input.markAsFinished(); await writer.finishWriting(); guard writer.status == .completed else { throw writer.error ?? makeError("Preprocessing export failed") }
+        progress(1); return outputURL
+    }
+
+    func process(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
+        let asset = AVAsset(url: url); guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
+        let duration = try await asset.load(.duration); let durationSeconds = max(CMTimeGetSeconds(duration), 0.001)
+        let naturalSize = try await track.load(.naturalSize); let nominal = try await track.load(.nominalFrameRate); let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
+        let oriented = naturalSize.applying(try await track.load(.preferredTransform)); let sourceWidth = even(max(Int(abs(oriented.width).rounded()), 2)); let sourceHeight = even(max(Int(abs(oriented.height).rounded()), 2))
+        let width = even(max(options.exportWidth ?? sourceWidth, 2)); let height = even(max(options.exportHeight ?? sourceHeight, 2))
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4"); var completed = false; defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
+        let reader = try AVAssetReader(asset: asset); let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferIOSurfacePropertiesKey as String: [:]]); readerOutput.alwaysCopiesSampleData = false; reader.add(readerOutput)
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        let exportFPS = max(options.targetFPS, 1); let profile = options.codec == .hevc ? AVVideoProfileLevelHEVCMainAutoLevel : options.profileLevel
+        let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: profile, AVVideoMaxKeyFrameIntervalKey: exportFPS * 2, AVVideoExpectedSourceFrameRateKey: exportFPS, AVVideoAllowFrameReorderingKey: true, AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: options.colorPrimaries, AVVideoTransferFunctionKey: options.transferFunction, AVVideoYCbCrMatrixKey: options.yCbCrMatrix]]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: options.codec, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression]); input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
+        writer.add(input); guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video export") }; writer.startSession(atSourceTime: .zero); guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read selected video") }
+        var previousBuffer: CVPixelBuffer?; var previousTime = CMTime.invalid
+        while let sample = readerOutput.copyNextSampleBuffer() {
+            try Task.checkCancellation(); guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }; let time = CMSampleBufferGetPresentationTimeStamp(sample); var processingError: Error?
             autoreleasepool {
                 do {
-                    if sourceFPS >= 59.0 { try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height) }
-                    else if sourceFPS >= 20.0 {
-                        guard let previousBuffer, previousTime.isValid, time > previousTime else { try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height); previousBuffer = buffer; previousTime = time; return }
-                        guard rife.isAvailable else { throw makeError("RIFE Core ML model is unavailable; 30→60 requires the bundled model") }
-                        let generated = try rife.interpolate(first: previousBuffer, second: buffer)
-                        let stabilized = artifactReduction.stabilize(generated: generated, first: previousBuffer, second: buffer) ?? generated
-                        let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5))
-                        try appendSync(CIImage(cvPixelBuffer: stabilized), at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height)
-                        try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
-                    } else { throw makeError("Unsupported source frame rate") }
+                    if sourceFPS >= 59.0 && options.preserveSourceFPS { try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height) }
+                    else if sourceFPS >= 20.0 { guard let previousBuffer, previousTime.isValid, time > previousTime else { try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height); previousBuffer = buffer; previousTime = time; return }; guard rife.isAvailable else { throw makeError("RIFE Core ML model is unavailable; 30→60 requires the bundled model") }; let generated = try rife.interpolate(first: previousBuffer, second: buffer); let stabilized = artifactReduction.stabilize(generated: generated, first: previousBuffer, second: buffer) ?? generated; let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5)); try appendSync(CIImage(cvPixelBuffer: stabilized), at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height); try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height) }
+                    else { throw makeError("Unsupported source frame rate") }
                     previousBuffer = buffer; previousTime = time
                 } catch { processingError = error }
                 progress(min(max(CMTimeGetSeconds(time) / durationSeconds, 0), 1))
             }
-            if let processingError { reader.cancelReading(); writer.cancelWriting(); throw processingError }
-            if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
-            if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
+            if let processingError { reader.cancelReading(); writer.cancelWriting(); throw processingError }; if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }; if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         }
-        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Video reader failed") }
-        if writer.status == .cancelled { throw makeError("Video writer cancelled") }
-        if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
-        input.markAsFinished(); await writer.finishWriting(); guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }
-        completed = true; progress(1); return outputURL
+        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Video reader failed") }; if writer.status == .cancelled { throw makeError("Video writer cancelled") }; if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
+        input.markAsFinished(); await writer.finishWriting(); guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }; completed = true; progress(1); return outputURL
     }
 
     private func appendSync(_ image: CIImage, at time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter, width: Int, height: Int) throws {
         while !adaptor.assetWriterInput.isReadyForMoreMediaData { if writer.status == .failed || writer.status == .cancelled { throw writer.error ?? makeError("Video writer stopped") }; Thread.sleep(forTimeInterval: 0.001) }
-        guard let pool = adaptor.pixelBufferPool else { throw makeError("Pixel buffer pool unavailable") }
-        var outputBuffer: CVPixelBuffer?; let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer)
-        guard result == kCVReturnSuccess, let outputBuffer else { throw makeError("Unable to allocate video frame (code \(result))") }
+        guard let pool = adaptor.pixelBufferPool else { throw makeError("Pixel buffer pool unavailable") }; var outputBuffer: CVPixelBuffer?; let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer); guard result == kCVReturnSuccess, let outputBuffer else { throw makeError("Unable to allocate video frame (code \(result))") }
         let extent = image.extent.integral; guard extent.width > 0, extent.height > 0 else { throw makeError("Invalid video frame extent") }
         autoreleasepool { let normalized = image.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY)); let sx = CGFloat(width) / extent.width; let sy = CGFloat(height) / extent.height; let finalImage = normalized.transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))); context.render(finalImage, to: outputBuffer) }
         guard adaptor.append(outputBuffer, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append video frame") }
