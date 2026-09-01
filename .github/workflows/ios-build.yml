@@ -11,7 +11,6 @@ env:
   SCHEME: FrameBoost
   PROJECT: FrameBoost/FrameBoost.xcodeproj
   BUNDLE_ID: com.aboghzayel.FrameBoost
-  IPHONEOS_SDK: iphoneos26.0
   IOS_DEPLOYMENT_TARGET: '26.0'
 
 jobs:
@@ -22,20 +21,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 26
+      - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
           if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
             sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
-          else
-            echo "Xcode 26.6 not found; using the macOS 26 runner default."
           fi
           xcodebuild -version
-          xcode-select -p
-          xcodebuild -showsdks | grep -E 'iphoneos26|iOS 26' || {
-            echo "iOS 26 SDK is not installed on this runner."
-            exit 1
-          }
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
+          echo "Using iPhoneOS SDK: ${SDK_VERSION}"
+          case "$SDK_VERSION" in
+            26.*) ;;
+            *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;;
+          esac
 
       - name: Clean build for iOS 26
         run: |
@@ -111,7 +112,11 @@ jobs:
             sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
           fi
           xcodebuild -version
-          xcodebuild -showsdks | grep -E 'iphoneos26|iOS 26'
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          case "$SDK_VERSION" in
+            26.*) ;;
+            *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;;
+          esac
 
       - name: Validate package manifest
         run: swift package dump-package > /dev/null
