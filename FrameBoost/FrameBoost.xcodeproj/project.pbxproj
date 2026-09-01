@@ -41,7 +41,7 @@ A10000420000000000000001 = {isa = PBXGroup; children = (A10000220000000000000001
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000220000000000000001; productType = "com.apple.product-type.application"; };
+A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000220000000000000001; productType = "com.apple.product-type.application"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -57,8 +57,8 @@ A10000320000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 214748
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-A10000710000000000000001 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; INFOPLIST_FILE = FrameBoost/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = FrameBoost; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-A10000720000000000000001 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; INFOPLIST_FILE = FrameBoost/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = FrameBoost; SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+A10000710000000000000001 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = FrameBoost; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+A10000720000000000000001 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = FrameBoost; SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
 A10000810000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; }; name = Debug; };
 A10000820000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; }; name = Release; };
 /* End XCBuildConfiguration section */
