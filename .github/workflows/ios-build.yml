@@ -11,34 +11,43 @@ env:
   SCHEME: FrameBoost
   PROJECT: FrameBoost/FrameBoost.xcodeproj
   BUNDLE_ID: com.aboghzayel.FrameBoost
+  IPHONEOS_SDK: iphoneos26.0
+  IOS_DEPLOYMENT_TARGET: '26.0'
 
 jobs:
   ios-build:
     name: Build clean unsigned IPA
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Select Xcode 26
         run: |
-          set -e
-          if [ -d /Applications/Xcode_16.4.app ]; then
-            sudo xcode-select -s /Applications/Xcode_16.4.app
+          set -euo pipefail
+          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
+            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
           else
-            echo "Using preselected Xcode"
+            echo "Xcode 26.6 not found; using the macOS 26 runner default."
           fi
           xcodebuild -version
+          xcode-select -p
+          xcodebuild -showsdks | grep -E 'iphoneos26|iOS 26' || {
+            echo "iOS 26 SDK is not installed on this runner."
+            exit 1
+          }
 
-      - name: Clean build
+      - name: Clean build for iOS 26
         run: |
+          set -euo pipefail
           xcodebuild \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
-            -sdk iphoneos \
+            -sdk "$IPHONEOS_SDK" \
             -configuration Release \
             -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
             clean build \
+            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
@@ -51,9 +60,10 @@ jobs:
           test -f "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" | grep -Fx "FrameBoost"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist" | grep -Fx "$IOS_DEPLOYMENT_TARGET"
           file "$APP/FrameBoost"
           lipo -info "$APP/FrameBoost" | grep -q arm64
-          echo "App bundle validation passed"
+          echo "iOS 26 app bundle validation passed"
 
       - name: Package clean IPA for ESign re-signing
         run: |
@@ -62,8 +72,6 @@ jobs:
           rm -rf Payload FrameBoost-unsigned.ipa
           mkdir -p Payload
           cp -R "$APP" Payload/FrameBoost.app
-          # This IPA is intentionally unsigned. ESign must apply the certificate
-          # and provisioning profile before installation on a physical device.
           /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
@@ -78,26 +86,38 @@ jobs:
           test -f ipa-check/Payload/FrameBoost.app/Info.plist
           test ! -e ipa-check/__MACOSX
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" ipa-check/Payload/FrameBoost.app/Info.plist | grep -Fx "$BUNDLE_ID"
-          echo "IPA layout is clean"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" ipa-check/Payload/FrameBoost.app/Info.plist | grep -Fx "$IOS_DEPLOYMENT_TARGET"
+          echo "IPA layout is clean and targets iOS 26"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: FrameBoost-unsigned-ipa
+          name: FrameBoost-iOS26-unsigned-ipa
           path: FrameBoost-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
 
   swift-validation:
-    name: Swift package validation
-    runs-on: macos-15
+    name: Swift package validation on macOS 26
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Select Xcode
+
+      - name: Select Xcode 26
         run: |
-          if [ -d /Applications/Xcode_16.4.app ]; then sudo xcode-select -s /Applications/Xcode_16.4.app; fi
+          set -euo pipefail
+          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
+            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep -E 'iphoneos26|iOS 26'
+
+      - name: Validate package manifest
+        run: swift package dump-package > /dev/null
+
       - name: Build core package
         run: swift build -c release
+
       - name: Test core package
         run: swift test -c release
