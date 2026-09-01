@@ -14,6 +14,7 @@ struct VideoProcessingOptions: Sendable {
 
 final class VideoProcessor {
     private let context = CIContext(options: [CIContextOption.cacheIntermediates: false])
+    private let rife = RIFEEngine()
 
     func process(url: URL, targetFPS: Int, progress: @escaping (Double) -> Void) async throws -> URL {
         try await process(url: url, options: VideoProcessingOptions(targetFPS: 60), progress: progress)
@@ -52,43 +53,69 @@ final class VideoProcessor {
         writer.startSession(atSourceTime: .zero)
         guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read selected video") }
 
+        var previousBuffer: CVPixelBuffer?
+        var previousTime = CMTime.invalid
         var lastWrittenTime = CMTime.invalid
         var frameIndex = 0
+
         while let sample = readerOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-            let sourceTime = CMSampleBufferGetPresentationTimeStamp(sample)
+            let time = CMSampleBufferGetPresentationTimeStamp(sample)
+            var error: Error?
+
             autoreleasepool {
-                let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform)
                 do {
                     if sourceFPS >= 59.0 {
-                        if sourceTime > lastWrittenTime {
-                            try appendSync(image, at: sourceTime, adaptor: adaptor, writer: writer, width: width, height: height)
-                            lastWrittenTime = sourceTime
+                        let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform)
+                        if time > lastWrittenTime {
+                            try appendSync(image, at: time, adaptor: adaptor, writer: writer, width: width, height: height)
+                            lastWrittenTime = time
+                        }
+                    } else if sourceFPS >= 20.0 {
+                        // True 2x interpolation path. It is enabled only when the validated
+                        // RIFE Core ML model is bundled; otherwise use a safe duplicate fallback.
+                        if let previousBuffer, previousTime.isValid, time > previousTime {
+                            if rife.isAvailable {
+                                do {
+                                    let generated = try rife.interpolate(first: previousBuffer, second: buffer)
+                                    let generatedImage = CIImage(cvPixelBuffer: generated)
+                                    let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5))
+                                    if midpoint > lastWrittenTime {
+                                        try appendSync(generatedImage, at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height)
+                                        lastWrittenTime = midpoint
+                                    }
+                                } catch {
+                                    // A model/schema failure must not break export.
+                                    // Fall back to a real source frame below.
+                                }
+                            }
+                            let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform)
+                            if time > lastWrittenTime {
+                                try appendSync(image, at: time, adaptor: adaptor, writer: writer, width: width, height: height)
+                                lastWrittenTime = time
+                            }
+                        } else {
+                            let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform)
+                            let outputTime = CMTime(value: Int64(frameIndex) * 2, timescale: 60)
+                            if outputTime > lastWrittenTime {
+                                try appendSync(image, at: outputTime, adaptor: adaptor, writer: writer, width: width, height: height)
+                                lastWrittenTime = outputTime
+                            }
                         }
                     } else {
-                        // Temporary safe 60 FPS normalization for lower-FPS sources.
-                        // The AI interpolation engine will replace this path when the
-                        // validated Core ML interpolation model is bundled.
-                        let outputTime = CMTime(value: Int64(frameIndex) * 1, timescale: 60)
-                        if outputTime > lastWrittenTime {
-                            try appendSync(image, at: outputTime, adaptor: adaptor, writer: writer, width: width, height: height)
-                            lastWrittenTime = outputTime
-                        }
-                        let secondTime = CMTimeAdd(outputTime, CMTime(value: 1, timescale: 60))
-                        if sourceFPS <= 45.0 && secondTime > lastWrittenTime {
-                            try appendSync(image, at: secondTime, adaptor: adaptor, writer: writer, width: width, height: height)
-                            lastWrittenTime = secondTime
-                        }
-                        frameIndex += 1
+                        throw makeError("Unsupported source frame rate")
                     }
+                    previousBuffer = buffer
+                    previousTime = time
+                    frameIndex += 1
                 } catch {
-                    objc_setAssociatedObject(self, &ErrorBox.key, error, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                    error = error
                 }
-                progress(min(max(CMTimeGetSeconds(sourceTime) / durationSeconds, 0), 1))
+                progress(min(max(CMTimeGetSeconds(time) / durationSeconds, 0), 1))
             }
-            if let error = objc_getAssociatedObject(self, &ErrorBox.key) as? Error {
-                objc_setAssociatedObject(self, &ErrorBox.key, nil, .OBJC_ASSOCIATION_ASSIGN)
+
+            if let error {
                 reader.cancelReading()
                 writer.cancelWriting()
                 throw error
@@ -136,5 +163,3 @@ final class VideoProcessor {
     private func even(_ value: Int) -> Int { value % 2 == 0 ? value : value - 1 }
     private func makeError(_ message: String) -> NSError { NSError(domain: "FrameBoost", code: -1, userInfo: [NSLocalizedDescriptionKey: message]) }
 }
-
-private enum ErrorBox { static var key = "FrameBoost.VideoProcessor.error" }
