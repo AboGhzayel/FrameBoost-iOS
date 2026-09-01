@@ -50,7 +50,7 @@ final class VideoProcessor {
         let height = even(max(Int(abs(size.height.rounded())), 2))
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-Preprocessed-\(UUID().uuidString).mp4")
         let reader = try AVAssetReader(asset: asset)
-        let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA])
         ro.alwaysCopiesSampleData = false
         reader.add(ro)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
@@ -58,7 +58,7 @@ final class VideoProcessor {
         let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, AVVideoExpectedSourceFrameRateKey: fps, AVVideoMaxKeyFrameIntervalKey: fps * 2]
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
         input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA, String(kCVPixelBufferWidthKey): width, String(kCVPixelBufferHeightKey): height])
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start preprocessing export") }
         writer.startSession(atSourceTime: .zero)
@@ -69,19 +69,12 @@ final class VideoProcessor {
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
             var image = CIImage(cvPixelBuffer: buffer)
-            if options.motionBlur {
-                image = image.applyingFilter("CIMotionBlur", parameters: [kCIInputRadiusKey: CGFloat(options.motionBlurStrength), kCIInputAngleKey: 0.0])
-            }
+            if options.motionBlur { image = image.applyingFilter("CIMotionBlur", parameters: [kCIInputRadiusKey: CGFloat(options.motionBlurStrength), kCIInputAngleKey: 0.0]) }
             while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(1)) }
             guard let pool = adaptor.pixelBufferPool else { throw makeError("Pixel buffer pool unavailable") }
             var out: CVPixelBuffer?
             guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &out) == kCVReturnSuccess, let out else { throw makeError("Unable to allocate preprocessing frame") }
-            let e = image.extent.integral
-            let normalized = image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
-            let sx = CGFloat(width) / max(e.width, 1)
-            let sy = CGFloat(height) / max(e.height, 1)
-            let final = normalized.transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-            ci.render(final, to: out)
+            renderAspectFill(image, to: out, width: width, height: height, context: ci)
             guard adaptor.append(out, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append preprocessing frame") }
             progress(min(max(CMTimeGetSeconds(time) / duration, 0), 1))
         }
@@ -109,7 +102,7 @@ final class VideoProcessor {
         defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
 
         let reader = try AVAssetReader(asset: asset)
-        let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA])
         ro.alwaysCopiesSampleData = false
         reader.add(ro)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
@@ -119,7 +112,7 @@ final class VideoProcessor {
         if let profile { compression[AVVideoProfileLevelKey] = profile }
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: options.codec, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
         input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA, String(kCVPixelBufferWidthKey): width, String(kCVPixelBufferHeightKey): height])
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video export") }
         writer.startSession(atSourceTime: .zero)
@@ -127,13 +120,11 @@ final class VideoProcessor {
 
         var previousBuffer: CVPixelBuffer?
         var previousTime = CMTime.invalid
-
         while let sample = ro.copyNextSampleBuffer() {
             try Task.checkCancellation()
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
             var processingError: Error?
-
             autoreleasepool {
                 do {
                     if sourceFPS >= 59 && options.preserveSourceFPS {
@@ -150,26 +141,13 @@ final class VideoProcessor {
                     } else {
                         throw makeError("Unsupported source frame rate")
                     }
-                } catch {
-                    processingError = error
-                }
+                } catch { processingError = error }
             }
-
-            if processingError != nil {
-                reader.cancelReading()
-                writer.cancelWriting()
-                throw processingError!
-            }
-
-            previousBuffer = buffer
-            previousTime = time
+            if let processingError { reader.cancelReading(); writer.cancelWriting(); throw processingError }
+            previousBuffer = buffer; previousTime = time
             progress(min(max(CMTimeGetSeconds(time) / duration, 0), 1))
-
-            if reader.status == .failed {
-                throw reader.error ?? makeError("Video reader failed")
-            }
+            if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
         }
-
         input.markAsFinished()
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }
@@ -185,17 +163,22 @@ final class VideoProcessor {
         }
         guard let pool = adaptor.pixelBufferPool else { throw makeError("Pixel buffer pool unavailable") }
         var outputBuffer: CVPixelBuffer?
-        let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer)
-        guard result == kCVReturnSuccess, let outputBuffer else { throw makeError("Unable to allocate video frame") }
-        let extent = image.extent.integral
-        guard extent.width > 0, extent.height > 0 else { throw makeError("Invalid video frame extent") }
-        autoreleasepool {
-            let normalized = image.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
-            let sx = CGFloat(width) / extent.width
-            let sy = CGFloat(height) / extent.height
-            context.render(normalized.transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))), to: outputBuffer)
-        }
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer) == kCVReturnSuccess, let outputBuffer else { throw makeError("Unable to allocate video frame") }
+        renderAspectFill(image, to: outputBuffer, width: width, height: height, context: context)
         guard adaptor.append(outputBuffer, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append video frame") }
+    }
+
+    private func renderAspectFill(_ image: CIImage, to output: CVPixelBuffer, width: Int, height: Int, context: CIContext) {
+        let extent = image.extent.integral
+        guard extent.width > 0, extent.height > 0 else { return }
+        // Aspect-fill keeps geometry correct. For a 9:16 export, the excess sides/top are cropped rather than stretched.
+        let scale = max(CGFloat(width) / extent.width, CGFloat(height) / extent.height)
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let scaledExtent = scaled.extent
+        let x = scaledExtent.midX - CGFloat(width) / 2
+        let y = scaledExtent.midY - CGFloat(height) / 2
+        let crop = CGRect(x: x, y: y, width: CGFloat(width), height: CGFloat(height))
+        context.render(scaled.cropped(to: crop), to: output, bounds: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)), colorSpace: nil)
     }
 
     private func even(_ value: Int) -> Int { value % 2 == 0 ? value : value - 1 }
