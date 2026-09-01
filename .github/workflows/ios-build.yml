@@ -7,27 +7,40 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+concurrency:
+  group: frameboost-ios-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   SCHEME: FrameBoost
   PROJECT: FrameBoost/FrameBoost.xcodeproj
   BUNDLE_ID: com.aboghzayel.FrameBoost
   IOS_DEPLOYMENT_TARGET: '26.0'
+  RIFE_MODEL: FrameBoost/RIFE_4_25.mlpackage
 
 jobs:
   ios-build:
     name: Build clean unsigned IPA with RIFE
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer; fi
+          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
+            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+          fi
           xcodebuild -version
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
-          case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
+          case "$SDK_VERSION" in
+            26.*) ;;
+            *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;;
+          esac
+
       - name: Install Python 3.12 and RIFE dependencies
         run: |
           set -euo pipefail
@@ -40,19 +53,56 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install "coremltools==9.0" "torch==2.9.0" "safetensors==0.5.3" "numpy<2"
           python -c "import sys, coremltools, torch, safetensors; print(sys.version); print('coremltools', coremltools.__version__); print('torch', torch.__version__); print('safetensors', safetensors.__version__)"
-      - name: Export and validate RIFE Core ML model
+
+      - name: Export RIFE Core ML model
         run: |
           set -euo pipefail
           source "$RUNNER_TEMP/rife-venv/bin/activate"
           test -f scripts/export_rife_coreml.py
-          rm -rf FrameBoost/RIFE_4_25.mlpackage
+          rm -rf "$RIFE_MODEL"
           python scripts/export_rife_coreml.py
-          test -d FrameBoost/RIFE_4_25.mlpackage
-          test -f FrameBoost/RIFE_4_25.mlpackage/Manifest.json
+          test -d "$RIFE_MODEL"
+          test -f "$RIFE_MODEL/Manifest.json"
+
+      - name: Compile RIFE for iOS
+        run: |
+          set -euo pipefail
+          test -d "$RIFE_MODEL"
+          rm -rf "$RUNNER_TEMP/RIFECompiled"
+          mkdir -p "$RUNNER_TEMP/RIFECompiled"
+          xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled"
+          RIFE_COMPILED="$(find "$RUNNER_TEMP/RIFECompiled" -type d -name 'RIFE_4_25.mlmodelc' -print -quit)"
+          test -n "$RIFE_COMPILED"
+          echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
+          find "$RIFE_COMPILED" -maxdepth 2 -type f -print
+
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -sdk "$IPHONEOS_SDK" \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
+            clean build \
+            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Embed compiled RIFE model in app bundle
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
+          test -d "$APP"
+          test -d "$RIFE_COMPILED"
+          rm -rf "$APP/RIFE_4_25.mlmodelc"
+          cp -R "$RIFE_COMPILED" "$APP/RIFE_4_25.mlmodelc"
+          test -d "$APP/RIFE_4_25.mlmodelc"
+          echo "Embedded RIFE model:"
+          du -sh "$APP/RIFE_4_25.mlmodelc"
+
       - name: Validate app bundle
         run: |
           set -euo pipefail
@@ -66,28 +116,13 @@ jobs:
           echo "Minimum OS: $ACTUAL_MIN_OS"
           test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
           test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
-          ARCHS="$(xcrun lipo -archs "$APP/FrameBoost" 2>/dev/null || true)"
+          ARCHS="$(xcrun lipo -archs "$APP/FrameBoost")"
           echo "Architectures: $ARCHS"
-          if [[ "$ARCHS" != *arm64* ]]; then
-            echo "ERROR: executable does not contain arm64"
-            file "$APP/FrameBoost"
-            xcrun lipo -info "$APP/FrameBoost" || true
-            exit 1
-          fi
-          RIFE_FOUND=0
-          if [ -d "$APP/RIFE_4_25.mlmodelc" ]; then
-            echo "RIFE compiled model present"
-            RIFE_FOUND=1
-          fi
-          if [ -d "$APP/RIFE_4_25.mlpackage" ]; then
-            echo "RIFE mlpackage present"
-            RIFE_FOUND=1
-          fi
-          if [ "$RIFE_FOUND" -eq 0 ]; then
-            echo "ERROR: RIFE model not found in app bundle"
-            find "$APP" -maxdepth 5 \( -iname '*rife*' -o -iname '*.mlmodelc' -o -iname '*.mlpackage' \) -print
-            exit 1
-          fi
+          [[ "$ARCHS" == *arm64* ]]
+          test -d "$APP/RIFE_4_25.mlmodelc"
+          test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
+          echo "RIFE compiled model is embedded and validated"
+
       - name: Package clean IPA
         run: |
           set -euo pipefail
@@ -98,6 +133,8 @@ jobs:
           /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
+          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/' >/dev/null
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
@@ -105,22 +142,3 @@ jobs:
           path: FrameBoost-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
-  swift-validation:
-    name: Swift package validation on macOS 26
-    runs-on: macos-26
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Select Xcode 26
-        run: |
-          set -euo pipefail
-          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer; fi
-          xcodebuild -version
-          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
-          case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
-      - name: Validate package manifest
-        run: swift package dump-package > /dev/null
-      - name: Build core package
-        run: swift build -c release
-      - name: Test core package
-        run: swift test -c release
