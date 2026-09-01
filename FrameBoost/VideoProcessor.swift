@@ -34,6 +34,7 @@ final class VideoProcessor {
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 10_000_000, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]
         ])
+        input.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferWidthKey as String: width,
@@ -136,7 +137,6 @@ final class VideoProcessor {
 
     private func even(_ value: Int) -> Int { value % 2 == 0 ? value : value - 1 }
     private func makeError(_ message: String) -> NSError { NSError(domain: "FrameBoost", code: -1, userInfo: [NSLocalizedDescriptionKey: message]) }
-
     private struct Frame { let image: CIImage; let pixelBuffer: CVPixelBuffer; let time: CMTime }
 }
 
@@ -159,15 +159,15 @@ private final class OpticalFlowEngine {
         CVPixelBufferLockBaseAddress(flow, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(flow, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(flow) else { throw NSError(domain: "FrameBoost.OpticalFlow", code: 3, userInfo: [NSLocalizedDescriptionKey: "Optical-flow buffer unavailable"]) }
-        let width = CVPixelBufferGetWidth(flow)
-        let height = CVPixelBufferGetHeight(flow)
-        let stride = CVPixelBufferGetBytesPerRow(flow) / MemoryLayout<Float>.size
+        let flowWidth = CVPixelBufferGetWidth(flow)
+        let flowHeight = CVPixelBufferGetHeight(flow)
+        let rowStride = CVPixelBufferGetBytesPerRow(flow) / MemoryLayout<Float>.size
         let values = base.assumingMemoryBound(to: Float.self)
         var xs: [Float] = []; var ys: [Float] = []
-        let stepX = max(width / 16, 1); let stepY = max(height / 16, 1)
-        for y in stride(from: stepY / 2, to: height, by: stepY) {
-            for x in stride(from: stepX / 2, to: width, by: stepX) {
-                let index = y * stride + x * 2
+        let stepX = max(flowWidth / 16, 1); let stepY = max(flowHeight / 16, 1)
+        for y in Swift.stride(from: stepY / 2, to: flowHeight, by: stepY) {
+            for x in Swift.stride(from: stepX / 2, to: flowWidth, by: stepX) {
+                let index = y * rowStride + x * 2
                 let dx = values[index]; let dy = values[index + 1]
                 if dx.isFinite && dy.isFinite && abs(dx) < 256 && abs(dy) < 256 { xs.append(dx); ys.append(dy) }
             }
