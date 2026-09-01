@@ -17,6 +17,7 @@ final class FrameBoostModel: ObservableObject {
     @Published var errorMessage: String?
 
     private let processor = VideoProcessor()
+    private var processingTask: Task<Void, Never>?
 
     func process() async {
         guard let input = selectedVideoURL, !isProcessing else { return }
@@ -25,23 +26,40 @@ final class FrameBoostModel: ObservableObject {
         errorMessage = nil
         outputURL = nil
 
-        let result = await processor.process(
-            inputURL: input,
-            targetFPS: settings.targetFPS,
-            preserveAudio: settings.preserveAudio
-        ) { [weak self] value in
-            Task { @MainActor in self?.progress = value }
+        do {
+            let result = try await processor.process(
+                url: input,
+                targetFPS: settings.targetFPS,
+                progress: { [weak self] value in
+                    Task { @MainActor [weak self] in
+                        self?.progress = value
+                    }
+                }
+            )
+            outputURL = result
+            progress = 1
+        } catch is CancellationError {
+            errorMessage = "Processing cancelled."
+        } catch {
+            errorMessage = error.localizedDescription
         }
 
-        if Task.isCancelled { return }
-        outputURL = result
-        progress = result == nil ? progress : 1
-        errorMessage = result == nil ? processor.errorMessage : nil
         isProcessing = false
+        processingTask = nil
+    }
+
+    func startProcessing() {
+        guard processingTask == nil else { return }
+        processingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.process()
+        }
     }
 
     func cancel() {
-        processor.cancel()
+        processingTask?.cancel()
+        processingTask = nil
         isProcessing = false
+        errorMessage = "Processing cancelled."
     }
 }
