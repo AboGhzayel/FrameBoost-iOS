@@ -1,0 +1,48 @@
+name: RIFE Model Validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate-rife:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install conversion dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch coremltools numpy pillow
+
+      - name: Check RIFE source
+        run: |
+          python - <<'PY'
+          import urllib.request
+          url = 'https://raw.githubusercontent.com/hzwer/Practical-RIFE/main/README.md'
+          with urllib.request.urlopen(url, timeout=20) as r:
+              data = r.read()
+          assert b'4.25' in data, 'RIFE 4.25 source verification failed'
+          print('Verified Practical-RIFE 4.25 is referenced by upstream source.')
+          PY
+
+      - name: Verify conversion tooling exists
+        run: |
+          python - <<'PY'
+          import torch, coremltools
+          print('PyTorch:', torch.__version__)
+          print('Core ML Tools:', coremltools.__version__)
+          PY
+
+      - name: Explain model artifact requirement
+        run: |
+          echo 'The official RIFE checkpoint is not committed to this repository.'
+          echo 'A pinned, SHA-256-verified checkpoint must be supplied before conversion.'
+          echo 'This workflow intentionally stops before downloading unverified weights.'
+          echo 'After the verified checkpoint URL/SHA is configured, add the conversion command and Core ML compile step.'
