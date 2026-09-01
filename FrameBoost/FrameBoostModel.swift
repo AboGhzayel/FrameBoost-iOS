@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AVFoundation
 
 struct FrameBoostSettings: Equatable {
     var targetFPS: Int = 60
@@ -34,54 +35,47 @@ final class FrameBoostModel: ObservableObject {
             guard let self else { return }
             do {
                 let asset = AVAsset(url: input)
-                guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw NSError(domain: "FrameBoost", code: 10, userInfo: [NSLocalizedDescriptionKey: "No video track found"]) }
-                let natural = try await track.load(.naturalSize)
-                let transform = try await track.load(.preferredTransform)
-                let oriented = natural.applying(transform)
-                let sourceW = max(Int(abs(oriented.width).rounded()), 2)
-                let sourceH = max(Int(abs(oriented.height).rounded()), 2)
-                let sourceFPS = max(Int((try await track.load(.nominalFrameRate)).rounded()), 1)
+                guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                    throw NSError(domain: "FrameBoost", code: 10, userInfo: [NSLocalizedDescriptionKey: "No video track found"])
+                }
+                let nominal = try await track.load(.nominalFrameRate)
+                let sourceFPS = max(Int(nominal.rounded()), 1)
 
                 var options = VideoProcessingOptions(targetFPS: requestedFPS)
-                if profile == .tiktokPro {
+                switch profile {
+                case .tiktokPro:
                     options.exportWidth = 1080
                     options.exportHeight = 1920
-                    options.bitrate = 12_000_000
+                    options.bitrate = sourceFPS >= 60 ? 14_000_000 : 12_000_000
                     options.forceSDR = true
-                } else if profile == .smoothSlowmo {
+                case .smoothSlowmo:
                     options.bitrate = 18_000_000
-                } else if profile == .fastRender {
+                case .fastRender:
                     options.bitrate = 10_000_000
-                } else if profile == .extremeCar {
+                case .extremeCar:
                     options.bitrate = 14_000_000
-                } else {
+                case .smooth60:
                     options.bitrate = 12_000_000
                 }
 
-                // Keep source dimensions available for future platform-aware transforms.
-                _ = (sourceW, sourceH, sourceFPS)
-                let result = try await processor.process(url: input, options: options) { value in
-                    Task { @MainActor [weak self] in self?.progress = value }
+                let result = try await processor.process(url: input, options: options) { [weak self] value in
+                    Task { @MainActor in
+                        self?.progress = value
+                    }
                 }
                 try Task.checkCancellation()
-                await MainActor.run {
-                    self.outputURL = result
-                    self.progress = 1
-                    self.isProcessing = false
-                    self.processingTask = nil
-                }
+                self.outputURL = result
+                self.progress = 1
+                self.isProcessing = false
+                self.processingTask = nil
             } catch is CancellationError {
-                await MainActor.run {
-                    self.isProcessing = false
-                    self.processingTask = nil
-                    self.errorMessage = "Processing cancelled."
-                }
+                self.isProcessing = false
+                self.processingTask = nil
+                self.errorMessage = "Processing cancelled."
             } catch {
-                await MainActor.run {
-                    self.isProcessing = false
-                    self.processingTask = nil
-                    self.errorMessage = "Export failed: \(error.localizedDescription)"
-                }
+                self.isProcessing = false
+                self.processingTask = nil
+                self.errorMessage = "Export failed: \(error.localizedDescription)"
             }
         }
     }
