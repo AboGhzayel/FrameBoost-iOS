@@ -1,9 +1,10 @@
 import Foundation
+import Combine
 
 struct FrameBoostSettings: Equatable {
-    var multiplier: Int = 2
-    var quality: Double = 0.85
+    var targetFPS: Int = 60
     var preserveAudio: Bool = true
+    var quality: Double = 0.92
 }
 
 @MainActor
@@ -18,14 +19,29 @@ final class FrameBoostModel: ObservableObject {
     private let processor = VideoProcessor()
 
     func process() async {
-        guard let input = selectedVideoURL else { return }
+        guard let input = selectedVideoURL, !isProcessing else { return }
         isProcessing = true
+        progress = 0
         errorMessage = nil
-        outputURL = await processor.process(inputURL: input, multiplier: settings.multiplier)
-        progress = processor.progress
+        outputURL = nil
+
+        let result = await processor.process(
+            inputURL: input,
+            targetFPS: settings.targetFPS,
+            preserveAudio: settings.preserveAudio
+        ) { [weak self] value in
+            Task { @MainActor in self?.progress = value }
+        }
+
+        if Task.isCancelled { return }
+        outputURL = result
+        progress = result == nil ? progress : 1
+        errorMessage = result == nil ? processor.errorMessage : nil
         isProcessing = false
-        if outputURL == nil { errorMessage = processor.errorMessage }
     }
 
-    func cancel() { processor.cancel() }
+    func cancel() {
+        processor.cancel()
+        isProcessing = false
+    }
 }
