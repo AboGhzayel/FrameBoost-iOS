@@ -46,13 +46,17 @@ def main() -> None:
         traced = torch.jit.trace(model, example, strict=False)
     traced = torch.jit.freeze(traced)
 
+    # RIFE itself does not require iOS 26-only Core ML operations. Exporting
+    # with a mature Core ML deployment target keeps the package portable and
+    # lets Xcode 26/iOS 26 compile and execute it without target-specific
+    # compiler regressions.
     mlmodel = ct.convert(
         traced,
         convert_to="mlprogram",
         inputs=[ct.TensorType(name="frames", shape=(1, 6, 256, 256), dtype=np.float32)],
         outputs=[ct.TensorType(name="frame", dtype=np.float32)],
         compute_precision=ct.precision.FLOAT16,
-        minimum_deployment_target=ct.target.iOS26,
+        minimum_deployment_target=ct.target.iOS18,
     )
     mlmodel.author = "FrameBoost / RIFE v4.25"
     mlmodel.short_description = "RIFE 2x frame interpolation; 6-channel RGB pair to intermediate RGB frame"
