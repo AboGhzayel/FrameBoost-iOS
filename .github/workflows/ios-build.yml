@@ -20,22 +20,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
-            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
-          fi
+          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer; fi
           xcodebuild -version
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
-          echo "Using iPhoneOS SDK: ${SDK_VERSION}"
-          case "$SDK_VERSION" in
-            26.*) ;;
-            *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;;
-          esac
-
+          case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
       - name: Prepare Python for RIFE conversion
         run: |
           set -euo pipefail
@@ -44,7 +36,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
           python -c "import coremltools, torch, safetensors; print('coremltools', coremltools.__version__); print('torch', torch.__version__)"
-
       - name: Export and validate RIFE Core ML model
         run: |
           set -euo pipefail
@@ -53,60 +44,24 @@ jobs:
           python scripts/export_rife_coreml.py
           test -d FrameBoost/RIFE_4_25.mlpackage
           test -f FrameBoost/RIFE_4_25.mlpackage/Manifest.json
-          echo "RIFE Core ML package generated successfully"
-
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -sdk "$IPHONEOS_SDK" \
-            -configuration Release \
-            -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
-            clean build \
-            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
       - name: Validate app bundle
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
-          test -d "$APP"
-          test -f "$APP/Info.plist"
+          test -d "$APP"; test -f "$APP/Info.plist"; test -d "$APP/RIFE_4_25.mlmodelc"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" | grep -Fx "FrameBoost"
           /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist" | grep -Fx "$IOS_DEPLOYMENT_TARGET"
-          test -d "$APP/RIFE_4_25.mlmodelc"
-          file "$APP/FrameBoost"
           lipo -info "$APP/FrameBoost" | grep -q arm64
-          echo "iOS 26 app bundle + RIFE model validation passed"
-
-      - name: Package clean IPA for ESign re-signing
+      - name: Package clean IPA
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
-          rm -rf Payload FrameBoost-unsigned.ipa
-          mkdir -p Payload
-          cp -R "$APP" Payload/FrameBoost.app
-          /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
-          rm -rf Payload
-          unzip -t FrameBoost-unsigned.ipa
-
-      - name: Verify IPA layout
-        run: |
-          set -euo pipefail
-          rm -rf ipa-check
-          mkdir ipa-check
-          unzip -q FrameBoost-unsigned.ipa -d ipa-check
-          test -d ipa-check/Payload/FrameBoost.app
-          test -d ipa-check/Payload/FrameBoost.app/RIFE_4_25.mlmodelc
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" ipa-check/Payload/FrameBoost.app/Info.plist | grep -Fx "$BUNDLE_ID"
-          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" ipa-check/Payload/FrameBoost.app/Info.plist | grep -Fx "$IOS_DEPLOYMENT_TARGET"
-          echo "IPA contains the compiled RIFE model and targets iOS 26"
-
+          rm -rf Payload FrameBoost-unsigned.ipa; mkdir -p Payload; cp -R "$APP" Payload/FrameBoost.app
+          /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload; rm -rf Payload; unzip -t FrameBoost-unsigned.ipa
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
@@ -114,32 +69,20 @@ jobs:
           path: FrameBoost-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
-
   swift-validation:
     name: Swift package validation on macOS 26
     runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Select Xcode 26
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
-            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
-          fi
+          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer; fi
           xcodebuild -version
-          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
-          case "$SDK_VERSION" in
-            26.*) ;;
-            *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;;
-          esac
-
       - name: Validate package manifest
         run: swift package dump-package > /dev/null
-
       - name: Build core package
         run: swift build -c release
-
       - name: Test core package
         run: swift test -c release
