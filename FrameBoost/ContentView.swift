@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var model = FrameBoostModel()
     @State private var selectedItem: PhotosPickerItem?
     @State private var showShare = false
+    @State private var selectedProfile: ProcessingProfile = .tiktokPro
 
     var body: some View {
         ZStack {
@@ -13,6 +14,7 @@ struct ContentView: View {
                 VStack(spacing: 20) {
                     hero
                     videoCard
+                    profileCard
                     settingsCard
                     if model.selectedVideoURL != nil { processCard }
                     if model.outputURL != nil { resultCard }
@@ -44,7 +46,7 @@ struct ContentView: View {
         VStack(spacing: 8) {
             Image(systemName: "sparkles.tv.fill").font(.system(size: 42, weight: .bold)).foregroundStyle(.tint)
             Text("FrameBoost").font(.system(.largeTitle, design: .rounded).weight(.bold))
-            Text("Smooth 60 FPS and 120 FPS video interpolation").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text("AI-ready 60 FPS / 120 FPS video enhancement").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
@@ -63,13 +65,31 @@ struct ContentView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
+    private var profileCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Processing profile", systemImage: "wand.and.stars").font(.headline)
+            Picker("Profile", selection: $selectedProfile) {
+                ForEach(ProcessingProfile.allCases) { profile in Text(profile.rawValue).tag(profile) }
+            }
+            .pickerStyle(.menu)
+            .disabled(model.isProcessing || model.selectedVideoURL == nil)
+            Text(selectedProfile.description).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(18).frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
     private var settingsCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Export", systemImage: "slider.horizontal.3").font(.headline)
             Picker("Frame rate", selection: $model.settings.targetFPS) { Text("60 FPS").tag(60); Text("120 FPS").tag(120) }
                 .pickerStyle(.segmented).disabled(model.isProcessing || model.selectedVideoURL == nil)
             Toggle("Preserve original audio", isOn: $model.settings.preserveAudio).disabled(model.isProcessing || model.selectedVideoURL == nil)
-            Text("Portrait 9:16 is preserved for TikTok without stretching.").font(.caption).foregroundStyle(.secondary)
+            if selectedProfile == .tiktokPro {
+                Label("TikTok Pro: vertical 1080×1920 + SDR export profile", systemImage: "iphone").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Portrait 9:16 is preserved without stretching.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .padding(18).frame(maxWidth: .infinity)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -77,8 +97,11 @@ struct ContentView: View {
 
     private var processCard: some View {
         VStack(spacing: 14) {
-            Button { model.startProcessing() } label: {
-                Label("Boost to \(model.settings.targetFPS) FPS", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity, minHeight: 60)
+            Button {
+                model.settings.targetFPS = selectedProfile.targetFPS
+                model.startProcessing()
+            } label: {
+                Label("Boost with \(selectedProfile.rawValue)", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity, minHeight: 60)
             }.buttonStyle(.borderedProminent).disabled(model.isProcessing)
             if model.isProcessing { ProgressView(value: model.progress) { Text("Processing \(Int(model.progress * 100))%") }; Button("Cancel") { model.cancel() }.buttonStyle(.bordered) }
         }
