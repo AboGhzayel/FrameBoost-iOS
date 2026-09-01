@@ -59,7 +59,8 @@ struct ContentView: View {
     }
 
     private var videoCard: some View {
-        let pickerTitle = model.selectedVideoURL == nil ? "Choose video" : "Choose another video"
+        let hasVideo = model.selectedVideoURL != nil
+        let pickerTitle = hasVideo ? "Choose another video" : "Choose video"
 
         return VStack(alignment: .leading, spacing: 14) {
             Label("Source video", systemImage: "video.fill")
@@ -72,7 +73,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
 
-            if model.selectedVideoURL != nil {
+            if hasVideo {
                 Label("Video selected", systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.green)
