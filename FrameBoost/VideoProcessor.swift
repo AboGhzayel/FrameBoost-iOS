@@ -8,95 +8,95 @@ final class VideoProcessor {
 
     func process(url: URL, targetFPS: Int, progress: @escaping (Double) -> Void) async throws -> URL {
         let asset = AVAsset(url: url)
-        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw NSError(domain: "FrameBoost", code: 1, userInfo: [NSLocalizedDescriptionKey: "No video track"])
-        }
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
         let duration = try await asset.load(.duration)
-        let nominalFPS = try await videoTrack.load(.nominalFrameRate)
-        let sourceFPS = nominalFPS > 0 ? nominalFPS : 30
-        let target = max(targetFPS, Int(ceil(sourceFPS)))
-        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(target))
+        let nominal = try await track.load(.nominalFrameRate)
+        let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
+        let target = max(Double(targetFPS), ceil(sourceFPS))
+        let durationSeconds = max(CMTimeGetSeconds(duration), 0.001)
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4")
-        try? FileManager.default.removeItem(at: outputURL)
 
         let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-        reader.add(output)
+        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        readerOutput.alwaysCopiesSampleData = false
+        reader.add(readerOutput)
+
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let size = try await videoTrack.load(.naturalSize)
+        let naturalSize = try await track.load(.naturalSize)
+        let width = max(Int(naturalSize.width), 2)
+        let height = max(Int(naturalSize.height), 2)
         let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: Int(size.width),
-            AVVideoHeightKey: Int(size.height),
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 12_000_000]
         ])
-        writerInput.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: writerInput, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: Int(size.width),
-            kCVPixelBufferHeightKey as String: Int(size.height)
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height
         ])
         writer.add(writerInput)
-        writer.startWriting()
+        guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video writer") }
         writer.startSession(atSourceTime: .zero)
-        guard reader.startReading() else { throw reader.error ?? NSError(domain: "FrameBoost", code: 2) }
+        guard reader.startReading() else { throw reader.error ?? makeError("Unable to read video") }
 
         var previous: (buffer: CVPixelBuffer, time: CMTime)?
-        while let sample = output.copyNextSampleBuffer() {
-            guard let currentBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+        while let sample = readerOutput.copyNextSampleBuffer() {
+            guard let current = CMSampleBufferGetImageBuffer(sample) else { continue }
             let currentTime = CMSampleBufferGetPresentationTimeStamp(sample)
+
             if let previous {
                 let delta = CMTimeGetSeconds(CMTimeSubtract(currentTime, previous.time))
-                if delta > 0 && delta < 1 {
-                    let steps = min(max(Int((delta * Double(target)).rounded()), 1), 8)
-                    try await appendFrame(previous.buffer, at: previous.time, to: adaptor)
-                    if steps > 1 {
-                        for index in 1..<steps {
-                            let fraction = CGFloat(index) / CGFloat(steps)
+                if delta > 0.0001 && delta < 1.0 {
+                    let count = min(max(Int((delta * target).rounded()), 1), 8)
+                    try await append(buffer: previous.buffer, time: previous.time, adaptor: adaptor, writer: writer)
+                    if count > 1 {
+                        for index in 1..<count {
+                            let fraction = CGFloat(index) / CGFloat(count)
                             let intermediateTime = CMTimeAdd(previous.time, CMTimeMultiplyByFloat64(CMTimeSubtract(currentTime, previous.time), multiplier: Float64(fraction)))
-                            try await appendBlend(from: previous.buffer, to: currentBuffer, fraction: fraction, at: intermediateTime, to: adaptor)
+                            try await appendBlend(first: previous.buffer, second: current, fraction: fraction, time: intermediateTime, adaptor: adaptor, writer: writer)
                         }
                     }
                 }
             } else {
-                try await appendFrame(currentBuffer, at: .zero, to: adaptor)
+                try await append(buffer: current, time: .zero, adaptor: adaptor, writer: writer)
             }
-            previous = (currentBuffer, currentTime)
-            progress(min(max(CMTimeGetSeconds(currentTime) / max(CMTimeGetSeconds(duration), 0.001), 0), 1))
+            previous = (current, currentTime)
+            progress(min(max(CMTimeGetSeconds(currentTime) / durationSeconds, 0), 1))
         }
-        if reader.status == .failed { throw reader.error ?? NSError(domain: "FrameBoost", code: 3) }
-        if let previous { try await appendFrame(previous.buffer, at: previous.time, to: adaptor) }
+
+        if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
+        if let previous { try await append(buffer: previous.buffer, time: previous.time, adaptor: adaptor, writer: writer) }
         writerInput.markAsFinished()
         await writer.finishWriting()
-        guard writer.status == .completed else { throw writer.error ?? NSError(domain: "FrameBoost", code: 4) }
-        _ = frameDuration
+        guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }
         progress(1)
         return outputURL
     }
 
-    private func appendFrame(_ buffer: CVPixelBuffer, at time: CMTime, to adaptor: AVAssetWriterInputPixelBufferAdaptor) async throws {
-        while !adaptor.assetWriterInput.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
-        guard adaptor.append(buffer, withPresentationTime: time) else {
-            throw NSError(domain: "FrameBoost", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to append video frame"])
+    private func append(buffer: CVPixelBuffer, time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter) async throws {
+        while !adaptor.assetWriterInput.isReadyForMoreMediaData {
+            if writer.status == .failed || writer.status == .cancelled { throw writer.error ?? makeError("Video writer stopped") }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
+        guard adaptor.append(buffer, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append video frame") }
     }
 
-    private func appendBlend(from first: CVPixelBuffer, to second: CVPixelBuffer, fraction: CGFloat, at time: CMTime, to adaptor: AVAssetWriterInputPixelBufferAdaptor) async throws {
-        guard let pool = adaptor.pixelBufferPool else { throw NSError(domain: "FrameBoost", code: 6, userInfo: [NSLocalizedDescriptionKey: "Unable to allocate output frame"] ) }
+    private func appendBlend(first: CVPixelBuffer, second: CVPixelBuffer, fraction: CGFloat, time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter) async throws {
+        guard let pool = adaptor.pixelBufferPool else { throw makeError("Unable to allocate output frame") }
         var outputBuffer: CVPixelBuffer?
-        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer)
-        guard let outputBuffer else { throw NSError(domain: "FrameBoost", code: 7, userInfo: [NSLocalizedDescriptionKey: "Unable to allocate output frame"] ) }
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer) == kCVReturnSuccess, let outputBuffer else { throw makeError("Unable to allocate output frame") }
+
         let firstImage = CIImage(cvPixelBuffer: first)
         let secondImage = CIImage(cvPixelBuffer: second)
-        let filter = CIFilter(name: "CIDissolveTransition")!
-        filter.setValue(firstImage, forKey: kCIInputImageKey)
-        filter.setValue(secondImage, forKey: kCIInputTargetImageKey)
-        filter.setValue(fraction, forKey: kCIInputTimeKey)
-        guard let image = filter.outputImage else { throw NSError(domain: "FrameBoost", code: 8, userInfo: [NSLocalizedDescriptionKey: "Unable to create interpolated frame"] ) }
+        let image = secondImage.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.0])
+            .applyingFilter("CIDissolveTransition", parameters: [kCIInputTargetImageKey: firstImage, kCIInputTimeKey: 1.0 - fraction])
         ciContext.render(image, to: outputBuffer)
-        while !adaptor.assetWriterInput.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
-        guard adaptor.append(outputBuffer, withPresentationTime: time) else {
-            throw NSError(domain: "FrameBoost", code: 9, userInfo: [NSLocalizedDescriptionKey: "Failed to append interpolated frame"])
-        }
+        try await append(buffer: outputBuffer, time: time, adaptor: adaptor, writer: writer)
+    }
+
+    private func makeError(_ message: String) -> NSError {
+        NSError(domain: "FrameBoost", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
