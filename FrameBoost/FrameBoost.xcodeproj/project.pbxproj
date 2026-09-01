@@ -5,29 +5,26 @@ classes = {};
 objectVersion = 56;
 objects = {
 /* Begin PBXBuildFile section */
-A10000100000000000000006 = {isa = PBXBuildFile; fileRef = A10000270000000000000001; };
-A10000110000000000000001 = {isa = PBXBuildFile; fileRef = A10000010000000000000001; };
-A10000120000000000000001 = {isa = PBXBuildFile; fileRef = A10000020000000000000001; };
-A10000130000000000000001 = {isa = PBXBuildFile; fileRef = A10000030000000000000001; };
-A10000140000000000000001 = {isa = PBXBuildFile; fileRef = A10000040000000000000001; };
-A10000150000000000000001 = {isa = PBXBuildFile; fileRef = A10000050000000000000001; };
-A10000160000000000000001 = {isa = PBXBuildFile; fileRef = A10000060000000000000001; };
-A10000170000000000000001 = {isa = PBXBuildFile; fileRef = A10000070000000000000001; };
-A10000180000000000000001 = {isa = PBXBuildFile; fileRef = A10000080000000000000001; };
+A10000100000000000000001 = {isa = PBXBuildFile; fileRef = A10000200000000000000001; };
+A10000110000000000000001 = {isa = PBXBuildFile; fileRef = A10000210000000000000001; };
+A10000120000000000000001 = {isa = PBXBuildFile; fileRef = A10000220000000000000001; };
+A10000130000000000000001 = {isa = PBXBuildFile; fileRef = A10000230000000000000001; };
+A10000140000000000000001 = {isa = PBXBuildFile; fileRef = A10000240000000000000001; };
+A10000150000000000000001 = {isa = PBXBuildFile; fileRef = A10000250000000000000001; };
+A10000160000000000000001 = {isa = PBXBuildFile; fileRef = A10000260000000000000001; };
+A10000170000000000000001 = {isa = PBXBuildFile; fileRef = A10000270000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-A10000010000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostApp.swift; sourceTree = "<group>"; };
-A10000020000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-A10000030000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPicker.swift; sourceTree = "<group>"; };
-A10000040000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoProcessor.swift; sourceTree = "<group>"; };
-A10000050000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RIFEEngine.swift; sourceTree = "<group>"; };
-A10000060000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
-A10000070000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportEngine.swift; sourceTree = "<group>"; };
-A10000080000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-A10000220000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FrameBoost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+A10000200000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostApp.swift; sourceTree = "<group>"; };
+A10000210000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+A10000220000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostModel.swift; sourceTree = "<group>"; };
+A10000230000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingProfile.swift; sourceTree = "<group>"; };
+A10000240000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoProcessor.swift; sourceTree = "<group>"; };
+A10000250000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RIFEEngine.swift; sourceTree = "<group>"; };
+A10000260000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactReduction.swift; sourceTree = "<group>"; };
 A10000270000000000000001 = {isa = PBXFileReference; lastKnownFileType = wrapper.mlpackage; path = RIFE_4_25.mlpackage; sourceTree = "<group>"; };
-A10000280000000000000001 = {isa = PBXFileReference; lastKnownFileType = file; path = FrameBoost.entitlements; sourceTree = "<group>"; };
+A10000280000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FrameBoost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,12 +33,12 @@ A10000300000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 
 /* Begin PBXGroup section */
 A10000400000000000000001 = {isa = PBXGroup; children = (A10000410000000000000001,A10000420000000000000001); sourceTree = "<group>"; };
-A10000410000000000000001 = {isa = PBXGroup; children = (A10000010000000000000001,A10000020000000000000001,A10000030000000000000001,A10000040000000000000001,A10000050000000000000001,A10000060000000000000001,A10000070000000000000001,A10000080000000000000001,A10000270000000000000001,A10000280000000000000001); path = .; sourceTree = "<group>"; };
-A10000420000000000000001 = {isa = PBXGroup; children = (A10000220000000000000001); name = Products; sourceTree = "<group>"; };
+A10000410000000000000001 = {isa = PBXGroup; children = (A10000200000000000000001,A10000210000000000000001,A10000220000000000000001,A10000230000000000000001,A10000240000000000000001,A10000250000000000000001,A10000260000000000000001,A10000270000000000000001); path = .; sourceTree = "<group>"; };
+A10000420000000000000001 = {isa = PBXGroup; children = (A10000280000000000000001); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000220000000000000001; productType = "com.apple.product-type.application"; };
+A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000280000000000000001; productType = "com.apple.product-type.application"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -49,11 +46,11 @@ A10000600000000000000001 = {isa = PBXProject; buildConfigurationList = A10000800
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-A10000310000000000000001 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000100000000000000006); runOnlyForDeploymentPostprocessing = 0; };
+A10000310000000000000001 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000170000000000000001); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-A10000320000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000110000000000000001,A10000120000000000000001,A10000130000000000000001,A10000140000000000000001,A10000150000000000000001,A10000160000000000000001,A10000170000000000000001,A10000180000000000000001); runOnlyForDeploymentPostprocessing = 0; };
+A10000320000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000100000000000000001,A10000110000000000000001,A10000120000000000000001,A10000130000000000000001,A10000140000000000000001,A10000150000000000000001,A10000160000000000000001); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
