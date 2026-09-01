@@ -59,17 +59,16 @@ struct ContentView: View {
     }
 
     private var videoCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let pickerTitle = model.selectedVideoURL == nil ? "Choose video" : "Choose another video"
+
+        return VStack(alignment: .leading, spacing: 14) {
             Label("Source video", systemImage: "video.fill")
                 .font(.headline)
 
             PhotosPicker(selection: $selectedItem, matching: .videos) {
-                Label(
-                    model.selectedVideoURL == nil ? "Choose video" : "Choose another video",
-                    systemImage: "plus.circle.fill"
-                )
-                .font(.headline)
-                .frame(maxWidth: .infinity, minHeight: 58)
+                Label(pickerTitle, systemImage: "plus.circle.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 58)
             }
             .buttonStyle(.borderedProminent)
 
@@ -115,7 +114,7 @@ struct ContentView: View {
     private var processCard: some View {
         VStack(spacing: 14) {
             Button {
-                Task { await model.process() }
+                model.startProcessing()
             } label: {
                 Label("Boost to \(model.settings.targetFPS) FPS", systemImage: "wand.and.stars")
                     .font(.headline)
