@@ -16,7 +16,7 @@ env:
 jobs:
   ios-build:
     name: Build clean unsigned IPA with RIFE
-    runs-on: macos-26
+    runs-on: macos-26-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
           case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
-      - name: Install Python 3.12 for RIFE conversion
+      - name: Install Python 3.12 and RIFE dependencies
         run: |
           set -euo pipefail
           brew list --versions python@3.12 >/dev/null 2>&1 || brew install python@3.12
@@ -38,8 +38,8 @@ jobs:
           "$PYTHON_BIN" -m venv "$RUNNER_TEMP/rife-venv"
           source "$RUNNER_TEMP/rife-venv/bin/activate"
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
-          python -c "import coremltools, torch, safetensors; print('coremltools', coremltools.__version__); print('torch', torch.__version__); print('safetensors', safetensors.__version__)"
+          python -m pip install "coremltools==9.0" "torch==2.9.0" "safetensors==0.5.3" "numpy<2"
+          python -c "import sys, coremltools, torch, safetensors; print(sys.version); print('coremltools', coremltools.__version__); print('torch', torch.__version__); print('safetensors', safetensors.__version__)"
       - name: Export and validate RIFE Core ML model
         run: |
           set -euo pipefail
@@ -76,7 +76,7 @@ jobs:
           retention-days: 14
   swift-validation:
     name: Swift package validation on macOS 26
-    runs-on: macos-26
+    runs-on: macos-26-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,6 +85,8 @@ jobs:
           set -euo pipefail
           if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer; fi
           xcodebuild -version
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
       - name: Validate package manifest
         run: swift package dump-package > /dev/null
       - name: Build core package
