@@ -28,8 +28,7 @@ final class FrameBoostModel: ObservableObject {
         errorMessage = nil
         outputURL = nil
         let profile = selectedProfile
-        let requestedFPS = profile.targetFPS
-        settings.targetFPS = requestedFPS
+        settings.targetFPS = profile.targetFPS
 
         processingTask = Task { [weak self] in
             guard let self else { return }
@@ -40,12 +39,10 @@ final class FrameBoostModel: ObservableObject {
                 }
                 let nominal = try await track.load(.nominalFrameRate)
                 let sourceFPS = max(Int(nominal.rounded()), 1)
-
-                var options = VideoProcessingOptions(targetFPS: requestedFPS)
+                var options = VideoProcessingOptions(targetFPS: profile.targetFPS)
                 switch profile {
                 case .tiktokPro:
-                    options.exportWidth = 1080
-                    options.exportHeight = 1920
+                    options.exportWidth = 1080; options.exportHeight = 1920
                     options.bitrate = sourceFPS >= 60 ? 14_000_000 : 12_000_000
                     options.forceSDR = true
                 case .smoothSlowmo:
@@ -54,28 +51,19 @@ final class FrameBoostModel: ObservableObject {
                     options.bitrate = 10_000_000
                 case .extremeCar:
                     options.bitrate = 14_000_000
+                    options.motionBlur = true; options.motionBlurStrength = 0.55
                 case .smooth60:
                     options.bitrate = 12_000_000
                 }
-
                 let result = try await processor.process(url: input, options: options) { [weak self] value in
-                    Task { @MainActor in
-                        self?.progress = value
-                    }
+                    Task { @MainActor in self?.progress = value }
                 }
                 try Task.checkCancellation()
-                self.outputURL = result
-                self.progress = 1
-                self.isProcessing = false
-                self.processingTask = nil
+                self.outputURL = result; self.progress = 1; self.isProcessing = false; self.processingTask = nil
             } catch is CancellationError {
-                self.isProcessing = false
-                self.processingTask = nil
-                self.errorMessage = "Processing cancelled."
+                self.isProcessing = false; self.processingTask = nil; self.errorMessage = "Processing cancelled."
             } catch {
-                self.isProcessing = false
-                self.processingTask = nil
-                self.errorMessage = "Export failed: \(error.localizedDescription)"
+                self.isProcessing = false; self.processingTask = nil; self.errorMessage = "Export failed: \(error.localizedDescription)"
             }
         }
     }
@@ -83,9 +71,6 @@ final class FrameBoostModel: ObservableObject {
     func process() async { startProcessing() }
 
     func cancel() {
-        processingTask?.cancel()
-        processingTask = nil
-        isProcessing = false
-        errorMessage = "Processing cancelled."
+        processingTask?.cancel(); processingTask = nil; isProcessing = false; errorMessage = "Processing cancelled."
     }
 }
