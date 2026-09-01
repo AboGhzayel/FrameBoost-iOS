@@ -33,8 +33,16 @@ struct ContentView: View {
         .tint(.blue)
         .task(id: selectedItem) {
             guard let item = selectedItem else { return }
-            do { guard let imported = try await item.loadTransferable(type: VideoTransferable.self) else { throw ImportError.failed }; model.selectedVideoURL = imported.url; model.outputURL = nil; model.errorMessage = nil }
-            catch { model.errorMessage = "Could not import this video. Please try again." }
+            do {
+                guard let imported = try await item.loadTransferable(type: VideoTransferable.self) else { throw ImportError.failed }
+                await MainActor.run {
+                    model.selectedVideoURL = imported.url
+                    model.outputURL = nil
+                    model.errorMessage = nil
+                }
+            } catch {
+                await MainActor.run { model.errorMessage = "Could not import this video. Please try again." }
+            }
         }
     }
 
