@@ -17,6 +17,13 @@ enum PreprocessingProfile: String, CaseIterable, Identifiable, Sendable {
     case studio = "Studio"
     case motionBlur = "Motion Blur"
     var id: String { rawValue }
+    var description: String {
+        switch self {
+        case .turbo: return "Fast re-encode with an optimized high bitrate before upload."
+        case .studio: return "Higher-quality re-encode designed to preserve detail."
+        case .motionBlur: return "High-quality re-encode with subtle inter-frame motion blur."
+        }
+    }
     var bitrate: Int {
         switch self {
         case .turbo: return 8_000_000
