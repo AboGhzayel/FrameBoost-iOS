@@ -26,6 +26,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
@@ -33,7 +34,43 @@ jobs:
           xcodebuild -version
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
-          case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
+          case "$SDK_VERSION" in 26.*) ;; *) echo "ERROR: Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
+
+      - name: Verify project references before build
+        run: |
+          set -euo pipefail
+          P="FrameBoost/FrameBoost.xcodeproj/project.pbxproj"
+          echo "Checking PBX object IDs..."
+          python3 - "$P" <<'PY'
+          import re, sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); text=p.read_text()
+          defined=set(re.findall(r'^([A-Fa-f0-9]{24})\s*=', text, re.M))
+          refs=set(re.findall(r'(?<![A-Za-z0-9])([A-Fa-f0-9]{24})(?![A-Za-z0-9])', text))
+          dangling=sorted(refs-defined)
+          malformed=sorted(set(re.findall(r'(?<![A-Za-z0-9])([A-Za-z0-9]{25,})(?![A-Za-z0-9])', text)))
+          print(f"Defined 24-char objects: {len(defined)}")
+          print(f"Referenced 24-char objects: {len(refs)}")
+          if malformed:
+              print("ERROR: malformed object IDs detected:")
+              for x in malformed: print(f"  {x} ({len(x)} chars)")
+              raise SystemExit(1)
+          if dangling:
+              print("ERROR: dangling PBX references:")
+              for x in dangling: print(f"  {x}")
+              raise SystemExit(1)
+          print("PBX object graph: OK")
+          PY
+          echo "RIFE project references:"
+          grep -n 'RIFE_4_25.mlpackage' "$P" || { echo 'ERROR: RIFE package reference missing'; exit 1; }
+          echo "RIFE BuildFile:"
+          grep -n 'A10000100000000000000006.*A10000270000000000000001' "$P" || { echo 'ERROR: RIFE PBXBuildFile link missing'; exit 1; }
+          echo "RIFE Resources phase:"
+          grep -n 'A10000310000000000000001.*A10000100000000000000006' "$P" || { echo 'ERROR: RIFE Resources phase link missing'; exit 1; }
+          echo "Target Resources phase:"
+          grep -n 'A10000500000000000000001.*A10000310000000000000001' "$P" || { echo 'ERROR: Target does not reference Resources phase'; exit 1; }
+          echo "PBX graph checks passed."
+
       - name: Install Python 3.12 and RIFE dependencies
         run: |
           set -euo pipefail
@@ -44,112 +81,82 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
           python -c "import coremltools, torch; print('coremltools', coremltools.__version__); print('torch', torch.__version__)"
-      - name: Export RIFE Core ML model
+
+      - name: Export and validate RIFE Core ML package
         run: |
           set -euo pipefail
           source "$RUNNER_TEMP/rife-venv/bin/activate"
-          test -f scripts/export_rife_coreml.py
           rm -rf "$RIFE_MODEL"
           python scripts/export_rife_coreml.py
-          test -d "$RIFE_MODEL"
-          test -f "$RIFE_MODEL/Manifest.json"
+          test -d "$RIFE_MODEL" || { echo 'ERROR: RIFE mlpackage was not created'; exit 1; }
+          test -f "$RIFE_MODEL/Manifest.json" || { echo 'ERROR: RIFE Manifest.json missing'; exit 1; }
           python - <<'PY'
           import coremltools as ct
-          m = ct.models.MLModel("FrameBoost/RIFE_4_25.mlpackage")
-          spec = m.get_spec()
-          print("Core ML package loads successfully")
-          print("specificationVersion:", spec.specificationVersion)
-          print("model type:", spec.WhichOneof("Type"))
-          print("inputs:", [(x.name, x.type.WhichOneof("Type")) for x in spec.description.input])
-          print("outputs:", [(x.name, x.type.WhichOneof("Type")) for x in spec.description.output])
+          p='FrameBoost/RIFE_4_25.mlpackage'
+          m=ct.models.MLModel(p)
+          s=m.get_spec()
+          print('Core ML package loads: OK')
+          print('specificationVersion:', s.specificationVersion)
+          print('inputs:', [(x.name, x.type.WhichOneof('Type')) for x in s.description.input])
+          print('outputs:', [(x.name, x.type.WhichOneof('Type')) for x in s.description.output])
           PY
-      - name: Verify RIFE Xcode resource reference
-        run: |
-          set -euo pipefail
-          test -d "$RIFE_MODEL"
-          PBX="FrameBoost/FrameBoost.xcodeproj/project.pbxproj"
-          echo "RIFE project references:"
-          grep -n -F 'RIFE_4_25.mlpackage' "$PBX"
-          echo "RIFE build file reference:"
-          grep -n -F 'A10000100000000000000006' "$PBX"
-          echo "RIFE file reference:"
-          grep -n -F 'A10000270000000000000001' "$PBX"
-          echo "Resources build phase reference:"
-          grep -n -F 'A10000310000000000000001' "$PBX"
-      - name: Validate pbxproj object references
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-          p = Path("FrameBoost/FrameBoost.xcodeproj/project.pbxproj")
-          s = p.read_text()
-          defined = set(re.findall(r'^\s*([A-Fa-f0-9]{24})\s*=\s*\{', s, re.M))
-          refs = set(re.findall(r'\b([A-Fa-f0-9]{24})\b', s))
-          dangling = sorted(refs - defined)
-          print(f"Defined objects: {len(defined)}")
-          print(f"Referenced IDs: {len(refs)}")
-          if dangling:
-              print("Dangling 24-character object IDs:")
-              print("\n".join(dangling))
-              raise SystemExit(1)
-          print("No dangling 24-character object references")
-          PY
+
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/FrameBoostDerived"
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
-      - name: Locate RIFE model in build products
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tee "$RUNNER_TEMP/xcodebuild.log"
+
+      - name: Locate compiled RIFE model
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
-          test -d "$APP"
+          test -d "$APP" || { echo "ERROR: app missing: $APP"; exit 1; }
           echo "Searching app and DerivedData for Core ML outputs..."
           find "$RUNNER_TEMP/FrameBoostDerived" -type d \( -name '*.mlmodelc' -o -name '*.mlpackage' \) -print | sort
-          echo "App bundle model directories:"
-          find "$APP" -maxdepth 8 -type d \( -name '*.mlmodelc' -o -name '*.mlpackage' \) -print | sort
           RIFE_COMPILED="$APP/RIFE_4_25.mlmodelc"
           if [ ! -d "$RIFE_COMPILED" ]; then
-            echo "ERROR: RIFE_4_25.mlmodelc is not at the expected app path"
-            find "$RUNNER_TEMP/FrameBoostDerived" -type d -name 'RIFE_4_25.mlmodelc' -print | sort
-            find "$APP" -maxdepth 2 -print | sort
+            echo "ERROR: expected compiled RIFE bundle missing: $RIFE_COMPILED"
+            echo "App contents:"
+            find "$APP" -maxdepth 4 -print | sort
+            echo "Build log references:"
+            grep -i -E 'RIFE|mlmodel|mlpackage|coreml' "$RUNNER_TEMP/xcodebuild.log" || true
             exit 1
           fi
-          test -f "$RIFE_COMPILED/coremldata.bin"
-          echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
-          echo "Compiled RIFE model: $RIFE_COMPILED"
-          find "$RIFE_COMPILED" -maxdepth 3 -print | sort
+          test -f "$RIFE_COMPILED/coremldata.bin" || { echo "ERROR: coremldata.bin missing"; find "$RIFE_COMPILED" -maxdepth 3 -type f -print; exit 1; }
+          echo "Compiled RIFE model found and contains coremldata.bin."
+
       - name: Validate app bundle
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
-          test -d "$APP"
-          test -f "$APP/Info.plist"
-          test -f "$APP/FrameBoost"
+          test -d "$APP" || { echo 'ERROR: app bundle missing'; exit 1; }
+          test -f "$APP/Info.plist" || { echo 'ERROR: Info.plist missing'; exit 1; }
+          test -f "$APP/FrameBoost" || { echo 'ERROR: executable missing'; exit 1; }
           ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
           ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
-          echo "Bundle ID: [$ACTUAL_BUNDLE_ID]"
-          echo "Minimum OS: [$ACTUAL_MIN_OS]"
-          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
-          test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
-          /usr/bin/file "$APP/FrameBoost"
-          /usr/bin/otool -hv "$APP/FrameBoost" | head -n 3
-          /usr/bin/lipo -info "$APP/FrameBoost" || true
-          /usr/bin/otool -hv "$APP/FrameBoost" | grep -Eq 'ARM64|arm64'
-          test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
-          echo "RIFE compiled model is embedded and validated"
-      - name: Package clean IPA
+          echo "Bundle ID: $ACTUAL_BUNDLE_ID"
+          echo "Minimum OS: $ACTUAL_MIN_OS"
+          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID" || { echo 'ERROR: Bundle ID mismatch'; exit 1; }
+          test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET" || { echo 'ERROR: Minimum OS mismatch'; exit 1; }
+          file "$APP/FrameBoost"
+          file "$APP/FrameBoost" | grep -Eiq 'Mach-O.*arm64|arm64.*Mach-O' || { echo 'ERROR: executable is not arm64'; exit 1; }
+          test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin" || { echo 'ERROR: compiled RIFE payload missing'; exit 1; }
+          echo 'App bundle validation: OK'
+
+      - name: Package and validate IPA
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
           rm -rf Payload FrameBoost-unsigned.ipa
-          mkdir -p Payload
+          mkdir Payload
           ditto "$APP" Payload/FrameBoost.app
           /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
-          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/coremldata.bin' >/dev/null
+          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/coremldata.bin' >/dev/null || { echo 'ERROR: RIFE payload missing from IPA'; exit 1; }
+          echo 'IPA validation: OK'
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
