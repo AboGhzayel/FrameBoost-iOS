@@ -8,15 +8,16 @@ enum PreprocessingProfile: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     var description: String {
         switch self {
-        case .turbo: return "Fast re-encode • balanced bitrate • optimized for AI input"
+        case .turbo: return "Light re-encode • smaller upload • fast AI input"
         case .studio: return "Higher bitrate • preserves more source detail before interpolation"
-        case .motionBlur: return "Adds subtle temporal blending before AI processing for smoother motion"
+        case .motionBlur: return "Subtle temporal blending • smoother perceived motion"
         }
     }
     var bitrate: Int {
         switch self { case .turbo: return 8_000_000; case .studio: return 20_000_000; case .motionBlur: return 14_000_000 }
     }
-    var frameRate: Int { 30 }
+    /// 0 means preserve the source frame rate; we never downsample a 60 FPS source before AI.
+    var frameRate: Int { 0 }
     var blurStrength: Float {
         switch self { case .turbo, .studio: return 0; case .motionBlur: return 0.18 }
     }
