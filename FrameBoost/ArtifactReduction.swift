@@ -1,35 +1,65 @@
 import Foundation
-import CoreImage
 import CoreVideo
 
-/// Lightweight post-processing guard for generated frames.
-/// It does not invent motion; it suppresses unstable high-frequency changes at boundaries.
 final class ArtifactReduction {
-    private let context = CIContext(options: [CIContextOption.cacheIntermediates: false])
-
+    /// Suppress implausible interpolation overshoot without globally blurring the frame.
     func stabilize(generated: CVPixelBuffer, first: CVPixelBuffer, second: CVPixelBuffer) -> CVPixelBuffer? {
-        let g = CIImage(cvPixelBuffer: generated)
-        let a = CIImage(cvPixelBuffer: first)
-        let b = CIImage(cvPixelBuffer: second)
-        let extent = g.extent.integral
-        guard extent.width > 0, extent.height > 0 else { return nil }
+        let width = CVPixelBufferGetWidth(generated)
+        let height = CVPixelBufferGetHeight(generated)
+        guard width == CVPixelBufferGetWidth(first), height == CVPixelBufferGetHeight(first),
+              width == CVPixelBufferGetWidth(second), height == CVPixelBufferGetHeight(second),
+              CVPixelBufferGetPixelFormatType(generated) == kCVPixelFormatType_32BGRA else { return nil }
 
-        // Keep the generated frame sharp, but reduce isolated ringing/tearing.
-        // A very small radius is intentional: aggressive blur destroys car/wheel detail.
-        let softened = g.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 0.35]).cropped(to: extent)
-        let result = softened.applyingFilter("CISourceOverCompositing", parameters: [kCIInputBackgroundImageKey: g])
         var output: CVPixelBuffer?
         let attrs: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey: CVPixelBufferGetWidth(generated),
-            kCVPixelBufferHeightKey: CVPixelBufferGetHeight(generated),
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
             kCVPixelBufferIOSurfacePropertiesKey: [:]
         ]
-        CVPixelBufferCreate(kCFAllocatorDefault, CVPixelBufferGetWidth(generated), CVPixelBufferGetHeight(generated), kCVPixelFormatType_32BGRA, attrs as CFDictionary, &output)
-        guard let output else { return nil }
-        context.render(result, to: output)
-        _ = a
-        _ = b
+        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &output) == kCVReturnSuccess,
+              let output else { return nil }
+
+        CVPixelBufferLockBaseAddress(generated, .readOnly)
+        CVPixelBufferLockBaseAddress(first, .readOnly)
+        CVPixelBufferLockBaseAddress(second, .readOnly)
+        CVPixelBufferLockBaseAddress(output, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(output, [])
+            CVPixelBufferUnlockBaseAddress(second, .readOnly)
+            CVPixelBufferUnlockBaseAddress(first, .readOnly)
+            CVPixelBufferUnlockBaseAddress(generated, .readOnly)
+        }
+
+        guard let gBase = CVPixelBufferGetBaseAddress(generated)?.assumingMemoryBound(to: UInt8.self),
+              let aBase = CVPixelBufferGetBaseAddress(first)?.assumingMemoryBound(to: UInt8.self),
+              let bBase = CVPixelBufferGetBaseAddress(second)?.assumingMemoryBound(to: UInt8.self),
+              let oBase = CVPixelBufferGetBaseAddress(output)?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let gr = CVPixelBufferGetBytesPerRow(generated)
+        let ar = CVPixelBufferGetBytesPerRow(first)
+        let br = CVPixelBufferGetBytesPerRow(second)
+        let or = CVPixelBufferGetBytesPerRow(output)
+
+        for y in 0..<height {
+            let gRow = gBase.advanced(by: y * gr)
+            let aRow = aBase.advanced(by: y * ar)
+            let bRow = bBase.advanced(by: y * br)
+            let oRow = oBase.advanced(by: y * or)
+            for x in 0..<width {
+                let i = x * 4
+                for c in 0..<3 {
+                    let g = Float(gRow[i + c])
+                    let a = Float(aRow[i + c])
+                    let b = Float(bRow[i + c])
+                    let low = min(a, b) - 22.0
+                    let high = max(a, b) + 22.0
+                    let clamped = min(max(g, low), high)
+                    let corrected = abs(g - clamped) > 0 ? (0.65 * clamped + 0.35 * g) : g
+                    oRow[i + c] = UInt8(clamping: Int(corrected.rounded()))
+                }
+                oRow[i + 3] = 255
+            }
+        }
         return output
     }
 }
