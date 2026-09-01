@@ -9,11 +9,15 @@
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleVersion</key><string>2</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>UIRequiresFullScreen</key><true/>
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key><string>LaunchBackground</string>
+    </dict>
     <key>UISupportedInterfaceOrientations</key>
-    <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string></array>
+    <array><string>UIInterfaceOrientationPortrait</string></array>
     <key>NSPhotoLibraryUsageDescription</key><string>FrameBoost needs access to select videos for processing.</string>
     <key>NSPhotoLibraryAddUsageDescription</key><string>FrameBoost needs permission to save processed videos.</string>
 </dict>
