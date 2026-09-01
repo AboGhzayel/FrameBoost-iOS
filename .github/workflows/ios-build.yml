@@ -26,7 +26,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
@@ -35,23 +34,16 @@ jobs:
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
           case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
-
       - name: Install Python 3.12 and RIFE dependencies
         run: |
           set -euo pipefail
           brew list --versions python@3.12 >/dev/null 2>&1 || brew install python@3.12
           PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3.12"
-          test -x "$PYTHON_BIN"
-          "$PYTHON_BIN" --version
           "$PYTHON_BIN" -m venv "$RUNNER_TEMP/rife-venv"
           source "$RUNNER_TEMP/rife-venv/bin/activate"
           python -m pip install --upgrade pip setuptools wheel
-          # coremltools 9 is validated against the PyTorch 2.7 generation.
-          # Do not use 2.9 here: it can produce an MLProgram package that
-          # converts successfully but is rejected by Xcode's Core ML compiler.
           python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
-          python -c "import sys, coremltools, torch, safetensors; print(sys.version); print('coremltools', coremltools.__version__); print('torch', torch.__version__); print('safetensors', safetensors.__version__)"
-
+          python -c "import coremltools, torch; print('coremltools', coremltools.__version__); print('torch', torch.__version__)"
       - name: Export RIFE Core ML model
         run: |
           set -euo pipefail
@@ -61,61 +53,51 @@ jobs:
           python scripts/export_rife_coreml.py
           test -d "$RIFE_MODEL"
           test -f "$RIFE_MODEL/Manifest.json"
-          # Load the generated package with Core ML before invoking Apple's compiler.
           python - <<'PY'
           import coremltools as ct
-          model = ct.models.MLModel("FrameBoost/RIFE_4_25.mlpackage")
-          print("Core ML package loaded successfully")
-          print(model.get_spec().description)
+          m = ct.models.MLModel("FrameBoost/RIFE_4_25.mlpackage")
+          print("Core ML package loads successfully")
+          print("specificationVersion:", m.get_spec().specificationVersion)
           PY
-
-      - name: Compile RIFE for iOS 26
+      - name: Prepare RIFE model for Xcode build
         run: |
           set -euo pipefail
-          rm -rf "$RUNNER_TEMP/RIFECompiled"
-          mkdir -p "$RUNNER_TEMP/RIFECompiled"
-          echo "Compiling $RIFE_MODEL with Xcode Core ML compiler..."
-          LOG="$RUNNER_TEMP/rife-compiler.log"
-          set +e
-          xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled" 2>&1 | tee "$LOG"
-          STATUS=${PIPESTATUS[0]}
-          set -e
-          if [ "$STATUS" -ne 0 ]; then
-            echo "Core ML compiler failed (exit $STATUS)."
-            echo "Compiler diagnostics:"
-            cat "$LOG" || true
-            echo "Model package contents:"
-            find "$RIFE_MODEL" -maxdepth 6 -type f -print | sort
-            echo "Manifest:"
-            cat "$RIFE_MODEL/Manifest.json" || true
-            echo "Core ML compiler help/version:"
-            xcrun coremlcompiler --help || true
-            exit "$STATUS"
-          fi
-          RIFE_COMPILED="$(find "$RUNNER_TEMP/RIFECompiled" -type d -name 'RIFE_4_25.mlmodelc' -print -quit)"
-          test -n "$RIFE_COMPILED"
-          test -f "$RIFE_COMPILED/Manifest.json"
-          test -f "$RIFE_COMPILED/coremldata.bin"
-          echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
-          du -sh "$RIFE_COMPILED"
-
+          # Do not invoke coremlcompiler directly. Xcode 26's build system owns
+          # MLProgram compilation and knows the exact iOS SDK/deployment target.
+          # The previous standalone invocation produced coremldata.bin and then
+          # exited 1 on this RIFE graph. Let Xcode compile the package as a
+          # model resource instead.
+          MODEL_DIR="$RUNNER_TEMP/FrameBoostModelResources"
+          rm -rf "$MODEL_DIR"
+          mkdir -p "$MODEL_DIR"
+          ditto "$RIFE_MODEL" "$MODEL_DIR/RIFE_4_25.mlpackage"
+          echo "RIFE_MODEL_DIR=$MODEL_DIR" >> "$GITHUB_ENV"
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/FrameBoostDerived"
+          # Inject the generated package into the source tree before xcodebuild.
+          # The project already carries its RIFE resource reference; replacing
+          # the package contents makes Xcode compile it with its own Core ML build
+          # rule rather than invoking coremlcompiler as a standalone command.
+          rm -rf FrameBoost/RIFE_4_25.mlpackage
+          ditto "$RIFE_MODEL_DIR/RIFE_4_25.mlpackage" FrameBoost/RIFE_4_25.mlpackage
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
-
-      - name: Embed compiled RIFE model in app bundle
+      - name: Locate compiled RIFE model
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
           test -d "$APP"
-          test -d "$RIFE_COMPILED"
-          rm -rf "$APP/RIFE_4_25.mlmodelc"
-          ditto "$RIFE_COMPILED" "$APP/RIFE_4_25.mlmodelc"
-          test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
-          test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
-
+          RIFE_COMPILED="$(find "$APP" -type d -name 'RIFE_4_25.mlmodelc' -print -quit)"
+          if [ -z "$RIFE_COMPILED" ]; then
+            echo "RIFE compiled model was not produced by Xcode"
+            find "$APP" -maxdepth 5 -type d \( -name '*.mlmodelc' -o -name '*.mlpackage' -o -iname '*rife*' \) -print
+            exit 1
+          fi
+          test -f "$RIFE_COMPILED/Manifest.json"
+          test -f "$RIFE_COMPILED/coremldata.bin"
+          echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
+          du -sh "$RIFE_COMPILED"
       - name: Validate app bundle
         run: |
           set -euo pipefail
@@ -126,11 +108,9 @@ jobs:
           echo "Bundle ID: $ACTUAL_BUNDLE_ID"; echo "Minimum OS: $ACTUAL_MIN_OS"
           test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"; test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
           file "$APP/FrameBoost" | grep -Eiq 'Mach-O.*arm64|arm64.*Mach-O'
-          xcrun lipo -info "$APP/FrameBoost" || true
           test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
           test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
           echo "RIFE compiled model is embedded and validated"
-
       - name: Package clean IPA
         run: |
           set -euo pipefail
@@ -142,7 +122,6 @@ jobs:
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
           unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/coremldata.bin' >/dev/null
-
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
