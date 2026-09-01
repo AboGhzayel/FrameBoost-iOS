@@ -1,22 +1,26 @@
 import Foundation
 import CoreML
+import CoreVideo
 
-/// Describes the real Core ML frame-generation contract expected by FrameBoost.
-/// No fake interpolation is reported as AI: until a compatible model is bundled,
-/// callers must use the optical-flow fallback.
+/// 60 FPS-only frame-generation contract for FrameBoost.
+/// RIFE 4.25 is the selected open-source model target; until its Core ML
+/// conversion is bundled, the app must not claim that fallback frames are AI.
 struct AIFrameGenerationPlan: Sendable {
     let inputFPS: Double
     let outputFPS: Double
     let factor: Int
     let modelName: String
 
-    var canGenerate: Bool { factor >= 2 && outputFPS > inputFPS }
+    var needsGeneration: Bool { inputFPS < 59.5 }
 
-    static func forFPS(input: Double, output: Int) -> Self {
+    static func for60FPS(input: Double) -> Self {
         let safeInput = max(input, 1)
-        let safeOutput = max(Double(output), safeInput)
-        let factor = max(Int((safeOutput / safeInput).rounded()), 1)
-        return Self(inputFPS: safeInput, outputFPS: safeOutput, factor: factor, modelName: "FrameInterpolation")
+        return Self(
+            inputFPS: safeInput,
+            outputFPS: 60,
+            factor: max(Int((60.0 / safeInput).rounded()), 1),
+            modelName: "RIFE-4.25"
+        )
     }
 }
 
@@ -24,7 +28,9 @@ final class AIFrameGenerator {
     private let model: MLModel?
 
     init() {
-        guard let url = Bundle.main.url(forResource: "FrameInterpolation", withExtension: "mlmodelc") else {
+        // Expected converted Core ML artifact. It is intentionally optional
+        // until the exact RIFE 4.25 feature schema is converted and validated.
+        guard let url = Bundle.main.url(forResource: "RIFE_4_25", withExtension: "mlmodelc") else {
             model = nil
             return
         }
@@ -33,10 +39,9 @@ final class AIFrameGenerator {
 
     var isAvailable: Bool { model != nil }
 
-    /// The actual tensor/image feature mapping depends on the selected model.
-    /// This method deliberately returns nil when no compatible model is bundled,
-    /// preventing a cross-fade from being mislabeled as AI-generated imagery.
-    func generateIntermediateFrame() -> CVPixelBuffer? {
+    func generateIntermediateFrame(input0: CVPixelBuffer, input1: CVPixelBuffer, timestep: Float) throws -> CVPixelBuffer? {
+        // Do not guess the model's tensor schema. Once the converted model is
+        // bundled, this adapter will map its exact inputs/outputs here.
         guard model != nil else { return nil }
         return nil
     }
