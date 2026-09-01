@@ -59,23 +59,33 @@ jobs:
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
           test -d "$APP"
           test -f "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" | grep -Fx "$BUNDLE_ID"
-          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist" | grep -Fx "$IOS_DEPLOYMENT_TARGET"
           test -f "$APP/FrameBoost"
+          ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")"
+          ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist")"
+          echo "Bundle ID: $ACTUAL_BUNDLE_ID"
+          echo "Minimum OS: $ACTUAL_MIN_OS"
+          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
+          test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
           ARCHS="$(xcrun lipo -archs "$APP/FrameBoost" 2>/dev/null || true)"
-          if [[ " $ARCHS " != *" arm64 "* ]]; then
+          echo "Architectures: $ARCHS"
+          if [[ "$ARCHS" != *arm64* ]]; then
             echo "ERROR: executable does not contain arm64"
             file "$APP/FrameBoost"
             xcrun lipo -info "$APP/FrameBoost" || true
             exit 1
           fi
+          RIFE_FOUND=0
           if [ -d "$APP/RIFE_4_25.mlmodelc" ]; then
-            echo "RIFE compiled model present in app bundle"
-          elif [ -d "$APP/RIFE_4_25.mlpackage" ]; then
-            echo "RIFE model present as mlpackage; Xcode did not compile it to mlmodelc"
-          else
-            echo "ERROR: No RIFE model resource found in app bundle"
-            find "$APP" -maxdepth 3 -type d -iname '*RIFE*' -print
+            echo "RIFE compiled model present"
+            RIFE_FOUND=1
+          fi
+          if [ -d "$APP/RIFE_4_25.mlpackage" ]; then
+            echo "RIFE mlpackage present"
+            RIFE_FOUND=1
+          fi
+          if [ "$RIFE_FOUND" -eq 0 ]; then
+            echo "ERROR: RIFE model not found in app bundle"
+            find "$APP" -maxdepth 5 \( -iname '*rife*' -o -iname '*.mlmodelc' -o -iname '*.mlpackage' \) -print
             exit 1
           fi
       - name: Package clean IPA
