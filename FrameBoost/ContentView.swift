@@ -71,7 +71,10 @@ struct ContentView: View {
             Label("Export", systemImage: "slider.horizontal.3").font(.headline)
             VStack(alignment: .leading, spacing: 8) {
                 Text("Frame rate").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                Picker("Frame rate", selection: $model.settings.targetFPS) { Text("60 FPS").tag(60); Text("120 FPS").tag(120) }.pickerStyle(.segmented).disabled(model.isProcessing || model.selectedVideoURL == nil)
+                Picker("Frame rate", selection: $model.settings.targetFPS) {
+                    Text("60 FPS").tag(60)
+                    Text("120 FPS").tag(120)
+                }.pickerStyle(.segmented).disabled(model.isProcessing || model.selectedVideoURL == nil)
             }
             Toggle("Preserve original audio", isOn: $model.settings.preserveAudio).disabled(model.isProcessing || model.selectedVideoURL == nil)
             Text("Vertical 9:16 videos stay vertical. Other aspect ratios are preserved without stretching.").font(.caption).foregroundStyle(.secondary)
@@ -80,27 +83,68 @@ struct ContentView: View {
 
     private var processCard: some View {
         VStack(spacing: 14) {
-            Button { model.startProcessing() } label { Label("Boost to \(model.settings.targetFPS) FPS", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity, minHeight: 60) }.buttonStyle(.borderedProminent).disabled(model.isProcessing)
-            if model.isProcessing { ProgressView(value: model.progress) { Text("Processing \(Int(model.progress * 100))%").font(.subheadline.weight(.medium)) }; Button("Cancel") { model.cancel() }.buttonStyle(.bordered) }
-        }.padding(18).frame(maxWidth: .infinity).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            Button {
+                model.startProcessing()
+            } label: {
+                Label("Boost to \(model.settings.targetFPS) FPS", systemImage: "wand.and.stars")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isProcessing)
+
+            if model.isProcessing {
+                ProgressView(value: model.progress) {
+                    Text("Processing \(Int(model.progress * 100))%")
+                        .font(.subheadline.weight(.medium))
+                }
+                Button("Cancel") { model.cancel() }.buttonStyle(.bordered)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var resultCard: some View {
         VStack(spacing: 12) {
             Label("Ready for TikTok", systemImage: "checkmark.seal.fill").font(.headline).foregroundStyle(.green)
-            Button { showShare = true } label { Label("Save / Share Video", systemImage: "square.and.arrow.up").font(.headline).frame(maxWidth: .infinity, minHeight: 58) }.buttonStyle(.borderedProminent)
-                .sheet(isPresented: $showShare) { if let output = model.outputURL { ShareSheet(items: [output]).presentationDetents([.medium, .large]) } }
-        }.padding(18).frame(maxWidth: .infinity).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            Button {
+                showShare = true
+            } label: {
+                Label("Save / Share Video", systemImage: "square.and.arrow.up")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 58)
+            }
+            .buttonStyle(.borderedProminent)
+            .sheet(isPresented: $showShare) {
+                if let output = model.outputURL {
+                    ShareSheet(items: [output]).presentationDetents([.medium, .large])
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
-    private func errorCard(_ message: String) -> some View { Label(message, systemImage: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(16).background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous)) }
+    private func errorCard(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .font(.footnote)
+            .foregroundStyle(.red)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(16)
+            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
 }
 
 private struct VideoTransferable: Transferable, Sendable {
     let url: URL
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .movie) { received in
-            let destination = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoostInput-\(UUID().uuidString).mov")
+            let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+            let destination = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoostInput-\(UUID().uuidString).\(ext)")
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.copyItem(at: received.file, to: destination)
             return Self(url: destination)
