@@ -22,7 +22,7 @@ jobs:
   ios-build:
     name: Build clean unsigned IPA with RIFE
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,21 +64,22 @@ jobs:
           test -d "$RIFE_MODEL"
           test -f "$RIFE_MODEL/Manifest.json"
 
-      - name: Compile RIFE for iOS
+      - name: Compile RIFE for iOS 26
         run: |
           set -euo pipefail
-          test -d "$RIFE_MODEL"
           rm -rf "$RUNNER_TEMP/RIFECompiled"
           mkdir -p "$RUNNER_TEMP/RIFECompiled"
           xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled"
           RIFE_COMPILED="$(find "$RUNNER_TEMP/RIFECompiled" -type d -name 'RIFE_4_25.mlmodelc' -print -quit)"
           test -n "$RIFE_COMPILED"
+          test -f "$RIFE_COMPILED/Manifest.json"
           echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
-          find "$RIFE_COMPILED" -maxdepth 2 -type f -print
+          du -sh "$RIFE_COMPILED"
 
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
+          rm -rf "$RUNNER_TEMP/FrameBoostDerived"
           xcodebuild \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
@@ -87,6 +88,8 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
             clean build \
             IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
@@ -98,10 +101,8 @@ jobs:
           test -d "$APP"
           test -d "$RIFE_COMPILED"
           rm -rf "$APP/RIFE_4_25.mlmodelc"
-          cp -R "$RIFE_COMPILED" "$APP/RIFE_4_25.mlmodelc"
-          test -d "$APP/RIFE_4_25.mlmodelc"
-          echo "Embedded RIFE model:"
-          du -sh "$APP/RIFE_4_25.mlmodelc"
+          ditto "$RIFE_COMPILED" "$APP/RIFE_4_25.mlmodelc"
+          test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
 
       - name: Validate app bundle
         run: |
@@ -110,15 +111,21 @@ jobs:
           test -d "$APP"
           test -f "$APP/Info.plist"
           test -f "$APP/FrameBoost"
-          ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")"
-          ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist")"
+
+          ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
           echo "Bundle ID: $ACTUAL_BUNDLE_ID"
           echo "Minimum OS: $ACTUAL_MIN_OS"
           test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
           test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
-          ARCHS="$(xcrun lipo -archs "$APP/FrameBoost")"
-          echo "Architectures: $ARCHS"
-          [[ "$ARCHS" == *arm64* ]]
+
+          echo "Executable type:"
+          file "$APP/FrameBoost"
+          file "$APP/FrameBoost" | grep -Eiq 'Mach-O.*arm64|arm64.*Mach-O'
+
+          echo "Lipo information (diagnostic only):"
+          xcrun lipo -info "$APP/FrameBoost" || true
+
           test -d "$APP/RIFE_4_25.mlmodelc"
           test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
           echo "RIFE compiled model is embedded and validated"
@@ -129,11 +136,11 @@ jobs:
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
           rm -rf Payload FrameBoost-unsigned.ipa
           mkdir -p Payload
-          cp -R "$APP" Payload/FrameBoost.app
+          ditto "$APP" Payload/FrameBoost.app
           /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
-          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/' >/dev/null
+          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/Manifest.json' >/dev/null
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
