@@ -8,6 +8,11 @@ let package = Package(
         .library(name: "FrameBoostCore", targets: ["FrameBoostCore"])
     ],
     targets: [
-        .target(name: "FrameBoostCore", path: "FrameBoostCore")
+        .target(name: "FrameBoostCore", path: "FrameBoostCore"),
+        .testTarget(
+            name: "FrameBoostCoreTests",
+            dependencies: ["FrameBoostCore"],
+            path: "FrameBoostCoreTests"
+        )
     ]
 )
