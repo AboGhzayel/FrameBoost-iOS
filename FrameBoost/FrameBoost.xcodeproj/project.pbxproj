@@ -1,74 +1,65 @@
 // !$*UTF8*$!
 {
- archiveVersion = 1;
- classes = {};
- objectVersion = 56;
- objects = {
+archiveVersion = 1;
+classes = {};
+objectVersion = 56;
+objects = {
 /* Begin PBXBuildFile section */
-A10000010000000000000001 = {isa = PBXBuildFile; fileRef = A10000110000000000000001; };
-A10000020000000000000001 = {isa = PBXBuildFile; fileRef = A10000120000000000000001; };
-A10000030000000000000001 = {isa = PBXBuildFile; fileRef = A10000130000000000000001; };
-A10000040000000000000001 = {isa = PBXBuildFile; fileRef = A10000140000000000000001; };
-A10000050000000000000001 = {isa = PBXBuildFile; fileRef = A10000150000000000000001; };
-A10000060000000000000001 = {isa = PBXBuildFile; fileRef = A10000160000000000000001; };
-A10000070000000000000001 = {isa = PBXBuildFile; fileRef = A10000170000000000000001; };
-A10000080000000000000001 = {isa = PBXBuildFile; fileRef = A10000180000000000000001; };
-A10000090000000000000001 = {isa = PBXBuildFile; fileRef = A10000190000000000000001; };
-A10000100000000000000002 = {isa = PBXBuildFile; fileRef = A10000230000000000000001; };
-A10000100000000000000003 = {isa = PBXBuildFile; fileRef = A10000240000000000000001; };
-A10000100000000000000004 = {isa = PBXBuildFile; fileRef = A10000250000000000000001; };
-A10000100000000000000005 = {isa = PBXBuildFile; fileRef = A10000260000000000000001; };
 A10000100000000000000006 = {isa = PBXBuildFile; fileRef = A10000270000000000000001; };
+A10000110000000000000001 = {isa = PBXBuildFile; fileRef = A10000010000000000000001; };
+A10000120000000000000001 = {isa = PBXBuildFile; fileRef = A10000020000000000000001; };
+A10000130000000000000001 = {isa = PBXBuildFile; fileRef = A10000030000000000000001; };
+A10000140000000000000001 = {isa = PBXBuildFile; fileRef = A10000040000000000000001; };
+A10000150000000000000001 = {isa = PBXBuildFile; fileRef = A10000050000000000000001; };
+A10000160000000000000001 = {isa = PBXBuildFile; fileRef = A10000060000000000000001; };
+A10000170000000000000001 = {isa = PBXBuildFile; fileRef = A10000070000000000000001; };
+A10000180000000000000001 = {isa = PBXBuildFile; fileRef = A10000080000000000000001; };
+A10000190000000000000001 = {isa = PBXBuildFile; fileRef = A10000090000000000000001; };
+A10000290000000000000001 = {isa = PBXBuildFile; fileRef = A10000280000000000000001; };
 /* End PBXBuildFile section */
 /* Begin PBXFileReference section */
-A10000110000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostApp.swift; sourceTree = "<group>"; };
-A10000120000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-A10000130000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostModel.swift; sourceTree = "<group>"; };
-A10000140000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoProcessor.swift; sourceTree = "<group>"; };
-A10000150000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterpolationEngine.swift; sourceTree = "<group>"; };
-A10000160000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPicker.swift; sourceTree = "<group>"; };
-A10000170000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLibrary.swift; sourceTree = "<group>"; };
-A10000180000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostConfig.swift; sourceTree = "<group>"; };
-A10000190000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostExport.swift; sourceTree = "<group>"; };
-A10000200000000000000001 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-A10000210000000000000001 = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FrameBoost.entitlements; sourceTree = "<group>"; };
+A10000010000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostApp.swift; sourceTree = "<group>"; };
+A10000020000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+A10000030000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPicker.swift; sourceTree = "<group>"; };
+A10000040000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoProcessor.swift; sourceTree = "<group>"; };
+A10000050000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RIFEEngine.swift; sourceTree = "<group>"; };
+A10000060000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+A10000070000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportEngine.swift; sourceTree = "<group>"; };
+A10000080000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+A10000090000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBoostApp.swift; sourceTree = "<group>"; };
 A10000220000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FrameBoost.app; sourceTree = BUILT_PRODUCTS_DIR; };
-A10000230000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingProfile.swift; sourceTree = "<group>"; };
-A10000240000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformOptimizer.swift; sourceTree = "<group>"; };
-A10000250000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudget.swift; sourceTree = "<group>"; };
-A10000260000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RIFEEngine.swift; sourceTree = "<group>"; };
 A10000270000000000000001 = {isa = PBXFileReference; lastKnownFileType = wrapper.mlpackage; path = RIFE_4_25.mlpackage; sourceTree = "<group>"; };
+A10000280000000000000001 = {isa = PBXFileReference; lastKnownFileType = file; path = FrameBoost.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 /* Begin PBXFrameworksBuildPhase section */
 A10000300000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 /* Begin PBXGroup section */
-A10000400000000000000001 = {isa = PBXGroup; children = (A10000410000000000000001, A10000420000000000000001); sourceTree = "<group>"; };
-A10000410000000000000001 = {isa = PBXGroup; children = (A10000110000000000000001,A10000120000000000000001,A10000130000000000000001,A10000140000000000000001,A10000150000000000000001,A10000160000000000000001,A10000170000000000000001,A10000180000000000000001,A10000190000000000000001,A10000230000000000000001,A10000240000000000000001,A10000250000000000000001,A10000260000000000000001,A10000270000000000000001,A10000200000000000000001,A10000210000000000000000001); path = .; sourceTree = "<group>"; };
+A10000400000000000000001 = {isa = PBXGroup; children = (A10000410000000000000001,A10000420000000000000001); sourceTree = "<group>"; };
+A10000410000000000000001 = {isa = PBXGroup; children = (A10000110000000000000001,A10000120000000000000001,A10000130000000000000001,A10000140000000000000001,A10000150000000000000001,A10000160000000000000001,A10000170000000000000001,A10000180000000000000001,A10000190000000000000001,A10000290000000000000001,A10000270000000000000001,A10000280000000000000001); path = .; sourceTree = "<group>"; };
 A10000420000000000000001 = {isa = PBXGroup; children = (A10000220000000000000001); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 /* Begin PBXNativeTarget section */
 A10000500000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = A10000700000000000000001; buildPhases = (A10000310000000000000001,A10000300000000000000001,A10000320000000000000000001); buildRules = (); dependencies = (); name = FrameBoost; productName = FrameBoost; productReference = A10000220000000000000001; productType = "com.apple.product-type.application"; };
 /* End PBXNativeTarget section */
 /* Begin PBXProject section */
-A10000600000000000000001 = {isa = PBXProject; attributes = {LastUpgradeCheck = 2600;}; buildConfigurationList = A10000710000000000000001; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en); mainGroup = A10000400000000000000001; productRefGroup = A10000420000000000000001; projectDirPath = ""; projectRoot = ""; targets = (A10000500000000000000001); };
+A10000600000000000000001 = {isa = PBXProject; buildConfigurationList = A10000800000000000000001; compatibilityVersion = "Xcode 15.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en); mainGroup = A10000400000000000000001; productRefGroup = A10000420000000000000001; projectDirPath = ""; projectRoot = ""; targets = (A10000500000000000000001); };
 /* End PBXProject section */
 /* Begin PBXResourcesBuildPhase section */
 A10000310000000000000001 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000100000000000000006); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 /* Begin PBXSourcesBuildPhase section */
-A10000320000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000010000000000000001,A10000020000000000000001,A10000030000000000000001,A10000040000000000000001,A10000050000000000000001,A10000060000000000000001,A10000070000000000000001,A10000080000000000000001,A10000090000000000000001,A10000100000000000000002,A10000100000000000000003,A10000100000000000000004,A10000100000000000000005); runOnlyForDeploymentPostprocessing = 0; };
+A10000320000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000110000000000000001,A10000120000000000000001,A10000130000000000000001,A10000140000000000000001,A10000150000000000000001,A10000160000000000000001,A10000170000000000000001,A10000180000000000000001,A10000190000000000000001); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 /* Begin XCBuildConfiguration section */
-A10000800000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SDKROOT = iphoneos; SWIFT_VERSION = 6.2; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
-A10000800000000000000002 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SDKROOT = iphoneos; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 6.2; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
-A10000810000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_FILE = Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.2; CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; IPHONEOS_DEPLOYMENT_TARGET = 26.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
-A10000810000000000000002 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_FILE = Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.2; CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; IPHONEOS_DEPLOYMENT_TARGET = 26.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+A10000710000000000000001 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; INFOPLIST_FILE = FrameBoost/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = FrameBoost; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+A10000720000000000000001 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CODE_SIGNING_REQUIRED = NO; INFOPLIST_FILE = FrameBoost/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.aboghzayel.FrameBoost; PRODUCT_NAME = FrameBoost; SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+A10000810000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; }; name = Debug; };
+A10000820000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; }; name = Release; };
 /* End XCBuildConfiguration section */
 /* Begin XCConfigurationList section */
-A10000700000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A10000810000000000000001,A10000810000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-A10000710000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A10000800000000000000001,A10000800000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+A10000700000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A10000710000000000000001,A10000720000000000000001); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+A10000800000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A10000810000000000000001,A10000820000000000000001); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
-};
 rootObject = A10000600000000000000001;
 }
