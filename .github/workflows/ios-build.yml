@@ -46,7 +46,10 @@ jobs:
           "$PYTHON_BIN" -m venv "$RUNNER_TEMP/rife-venv"
           source "$RUNNER_TEMP/rife-venv/bin/activate"
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "coremltools==9.0" "torch==2.9.0" "safetensors==0.5.3" "numpy<2"
+          # coremltools 9 is validated against the PyTorch 2.7 generation.
+          # Do not use 2.9 here: it can produce an MLProgram package that
+          # converts successfully but is rejected by Xcode's Core ML compiler.
+          python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
           python -c "import sys, coremltools, torch, safetensors; print(sys.version); print('coremltools', coremltools.__version__); print('torch', torch.__version__); print('safetensors', safetensors.__version__)"
 
       - name: Export RIFE Core ML model
@@ -58,6 +61,13 @@ jobs:
           python scripts/export_rife_coreml.py
           test -d "$RIFE_MODEL"
           test -f "$RIFE_MODEL/Manifest.json"
+          # Load the generated package with Core ML before invoking Apple's compiler.
+          python - <<'PY'
+          import coremltools as ct
+          model = ct.models.MLModel("FrameBoost/RIFE_4_25.mlpackage")
+          print("Core ML package loaded successfully")
+          print(model.get_spec().description)
+          PY
 
       - name: Compile RIFE for iOS 26
         run: |
@@ -65,25 +75,25 @@ jobs:
           rm -rf "$RUNNER_TEMP/RIFECompiled"
           mkdir -p "$RUNNER_TEMP/RIFECompiled"
           echo "Compiling $RIFE_MODEL with Xcode Core ML compiler..."
+          LOG="$RUNNER_TEMP/rife-compiler.log"
           set +e
-          xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled" 2>&1 | tee "$RUNNER_TEMP/rife-compiler.log"
+          xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled" 2>&1 | tee "$LOG"
           STATUS=${PIPESTATUS[0]}
           set -e
           if [ "$STATUS" -ne 0 ]; then
-            echo "Core ML compiler failed (exit $STATUS). Package diagnostics:"
-            find "$RIFE_MODEL" -maxdepth 5 -type f -print | sort
+            echo "Core ML compiler failed (exit $STATUS)."
+            echo "Compiler diagnostics:"
+            cat "$LOG" || true
+            echo "Model package contents:"
+            find "$RIFE_MODEL" -maxdepth 6 -type f -print | sort
             echo "Manifest:"
-            cat "$RIFE_MODEL/Manifest.json"
-            echo "Compiler log:"
-            cat "$RUNNER_TEMP/rife-compiler.log"
+            cat "$RIFE_MODEL/Manifest.json" || true
+            echo "Core ML compiler help/version:"
+            xcrun coremlcompiler --help || true
             exit "$STATUS"
           fi
           RIFE_COMPILED="$(find "$RUNNER_TEMP/RIFECompiled" -type d -name 'RIFE_4_25.mlmodelc' -print -quit)"
-          if [ -z "$RIFE_COMPILED" ]; then
-            echo "ERROR: coremlcompiler returned success but no .mlmodelc was produced"
-            find "$RUNNER_TEMP/RIFECompiled" -maxdepth 5 -print
-            exit 1
-          fi
+          test -n "$RIFE_COMPILED"
           test -f "$RIFE_COMPILED/Manifest.json"
           test -f "$RIFE_COMPILED/coremldata.bin"
           echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
