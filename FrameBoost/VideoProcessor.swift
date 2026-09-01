@@ -27,9 +27,7 @@ final class VideoProcessor {
         let naturalSize = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
         let nominal = try await track.load(.nominalFrameRate)
-        let sourceFPS = nominal > 0 ? Double(nominal) : 60.0
-        guard sourceFPS >= 59.0 else { throw makeError("FrameBoost requires a 60 FPS source") }
-
+        let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
         let oriented = naturalSize.applying(transform)
         let sourceWidth = even(max(Int(abs(oriented.width).rounded()), 2))
         let sourceHeight = even(max(Int(abs(oriented.height).rounded()), 2))
@@ -45,72 +43,62 @@ final class VideoProcessor {
         reader.add(readerOutput)
 
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let compression: [String: Any] = [
-            AVVideoAverageBitRateKey: options.bitrate,
-            AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-            AVVideoMaxKeyFrameIntervalKey: 120,
-            AVVideoExpectedSourceFrameRateKey: 60
-        ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: compression
-        ])
+        let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, AVVideoMaxKeyFrameIntervalKey: 120, AVVideoExpectedSourceFrameRateKey: 60]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression])
         input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: width,
-            kCVPixelBufferHeightKey as String: height,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
-        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         writer.add(input)
-
         guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video export") }
         writer.startSession(atSourceTime: .zero)
-        guard reader.startReading() else {
-            writer.cancelWriting()
-            throw reader.error ?? makeError("Unable to read selected video")
-        }
+        guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read selected video") }
 
         var lastWrittenTime = CMTime.invalid
+        var frameIndex = 0
         while let sample = readerOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-            let time = CMSampleBufferGetPresentationTimeStamp(sample)
+            let sourceTime = CMSampleBufferGetPresentationTimeStamp(sample)
             autoreleasepool {
                 let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform)
-                // Native 60 FPS pass-through: exactly one output frame per input frame.
                 do {
-                    if time > lastWrittenTime {
-                        try appendSync(image, at: time, adaptor: adaptor, writer: writer, width: width, height: height)
-                        lastWrittenTime = time
+                    if sourceFPS >= 59.0 {
+                        if sourceTime > lastWrittenTime {
+                            try appendSync(image, at: sourceTime, adaptor: adaptor, writer: writer, width: width, height: height)
+                            lastWrittenTime = sourceTime
+                        }
+                    } else {
+                        // Temporary safe 60 FPS normalization for lower-FPS sources.
+                        // The AI interpolation engine will replace this path when the
+                        // validated Core ML interpolation model is bundled.
+                        let outputTime = CMTime(value: Int64(frameIndex) * 1, timescale: 60)
+                        if outputTime > lastWrittenTime {
+                            try appendSync(image, at: outputTime, adaptor: adaptor, writer: writer, width: width, height: height)
+                            lastWrittenTime = outputTime
+                        }
+                        let secondTime = CMTimeAdd(outputTime, CMTime(value: 1, timescale: 60))
+                        if sourceFPS <= 45.0 && secondTime > lastWrittenTime {
+                            try appendSync(image, at: secondTime, adaptor: adaptor, writer: writer, width: width, height: height)
+                            lastWrittenTime = secondTime
+                        }
+                        frameIndex += 1
                     }
                 } catch {
-                    // Do not swallow the real writer/buffer error and replace it with
-                    // the generic "processing stopped" message.
-                    reader.cancelReading()
-                    writer.cancelWriting()
                     objc_setAssociatedObject(self, &ErrorBox.key, error, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                 }
-                progress(min(max(CMTimeGetSeconds(time) / durationSeconds, 0), 1))
+                progress(min(max(CMTimeGetSeconds(sourceTime) / durationSeconds, 0), 1))
             }
             if let error = objc_getAssociatedObject(self, &ErrorBox.key) as? Error {
                 objc_setAssociatedObject(self, &ErrorBox.key, nil, .OBJC_ASSOCIATION_ASSIGN)
+                reader.cancelReading()
+                writer.cancelWriting()
                 throw error
             }
-            if reader.status == .cancelled || writer.status == .cancelled {
-                throw writer.error ?? makeError("Video processing stopped")
-            }
-        }
-        if reader.status == .failed {
-            writer.cancelWriting()
-            throw reader.error ?? makeError("Video reader failed")
-        }
-        if writer.status == .failed {
-            throw writer.error ?? makeError("Video writer failed")
+            if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
+            if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         }
 
+        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Video reader failed") }
+        if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         input.markAsFinished()
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }
