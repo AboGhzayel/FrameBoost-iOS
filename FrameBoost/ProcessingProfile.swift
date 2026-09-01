@@ -6,27 +6,23 @@ enum ProcessingProfile: String, CaseIterable, Identifiable {
     case smoothSlowmo = "Smooth Slowmo"
     case fastRender = "Fast Render"
     case tiktokPro = "TikTok Pro"
-
     var id: String { rawValue }
+    var targetFPS: Int { self == .smoothSlowmo ? 120 : 60 }
+    var usesOpticalFlow: Bool { self != .fastRender }
+    var description: String { rawValue }
+}
 
-    var targetFPS: Int {
+enum PreprocessingProfile: String, CaseIterable, Identifiable, Sendable {
+    case turbo = "Turbo"
+    case studio = "Studio"
+    case motionBlur = "Motion Blur"
+    var id: String { rawValue }
+    var bitrate: Int {
         switch self {
-        case .smoothSlowmo: return 120
-        default: return 60
+        case .turbo: return 8_000_000
+        case .studio: return 20_000_000
+        case .motionBlur: return 16_000_000
         }
     }
-
-    var usesOpticalFlow: Bool {
-        self != .fastRender
-    }
-
-    var description: String {
-        switch self {
-        case .smooth60: return "Balanced AI-ready 30→60 FPS processing"
-        case .extremeCar: return "Motion-focused processing for fast vehicles and action"
-        case .smoothSlowmo: return "Higher frame rate for smoother slow-motion footage"
-        case .fastRender: return "Fast, lightweight processing with minimal AI work"
-        case .tiktokPro: return "Vertical short-form export optimized for TikTok"
-        }
-    }
+    var blurStrength: Double { self == .motionBlur ? 0.22 : 0.0 }
 }
