@@ -4,7 +4,8 @@ import CoreImage
 import Vision
 
 final class VideoProcessor {
-    private let context = CIContext(options: nil)
+    // Avoid retaining intermediate Core Image resources between frames.
+    private let context = CIContext(options: [CIContextOption.cacheIntermediates: false])
     private let opticalFlow = OpticalFlowEngine()
 
     func process(url: URL, targetFPS: Int, progress: @escaping (Double) -> Void) async throws -> URL {
@@ -23,7 +24,9 @@ final class VideoProcessor {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4")
 
         let reader = try AVAssetReader(asset: asset)
-        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ])
         readerOutput.alwaysCopiesSampleData = false
         reader.add(readerOutput)
 
@@ -32,7 +35,10 @@ final class VideoProcessor {
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 10_000_000, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 10_000_000,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+            ]
         ])
         input.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
@@ -47,35 +53,54 @@ final class VideoProcessor {
 
         var previous: Frame?
         var lastWrittenTime = CMTime.invalid
+
         while let sample = readerOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
-            let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-            let current = Frame(image: image, pixelBuffer: buffer, time: time)
+
+            // Keep only the previous decoded frame alive. Vision/Core Image objects are
+            // deliberately scoped so large temporary buffers can be reclaimed promptly.
+            let current = Frame(pixelBuffer: buffer, image: normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform), time: time)
 
             if let previous {
                 let delta = CMTimeGetSeconds(time - previous.time)
                 if delta > 0.0001 && delta < 1.0 {
                     let count = min(max(Int((delta * fps).rounded()), 1), 8)
+                    let previousImage = previous.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+                    let currentImage = current.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+
                     if previous.time > lastWrittenTime {
-                        try await append(previous.image, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height)
+                        try await append(previousImage, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height)
                         lastWrittenTime = previous.time
                     }
+
                     if count > 1 {
-                        let motion = try? opticalFlow.estimate(from: previous.pixelBuffer, to: current.pixelBuffer)
+                        // Optical flow is computed at medium accuracy. This avoids the large
+                        // transient memory spike caused by high-accuracy full-resolution flow.
+                        let motion: OpticalFlowEngine.Motion?
+                        if width * height <= 2_073_600 {
+                            motion = autoreleasepool { () -> OpticalFlowEngine.Motion? in
+                                try? opticalFlow.estimate(from: previous.pixelBuffer, to: current.pixelBuffer)
+                            }
+                        } else {
+                            motion = nil
+                        }
+
                         for i in 1..<count {
+                            try Task.checkCancellation()
                             let f = CGFloat(i) / CGFloat(count)
                             let candidate = CMTimeAdd(previous.time, CMTimeMultiplyByFloat64(time - previous.time, multiplier: Double(f)))
                             guard candidate > lastWrittenTime else { continue }
-                            let intermediate = makeIntermediate(previous: previous.image, current: current.image, motion: motion, fraction: f)
+                            let intermediate = makeIntermediate(previous: previousImage, current: currentImage, motion: motion, fraction: f)
                             try await append(intermediate, at: candidate, adaptor: adaptor, writer: writer, width: width, height: height)
                             lastWrittenTime = candidate
                         }
                     }
                 }
             } else {
-                try await append(current.image, at: .zero, adaptor: adaptor, writer: writer, width: width, height: height)
+                let firstImage = current.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+                try await append(firstImage, at: .zero, adaptor: adaptor, writer: writer, width: width, height: height)
                 lastWrittenTime = .zero
             }
             previous = current
@@ -137,7 +162,7 @@ final class VideoProcessor {
 
     private func even(_ value: Int) -> Int { value % 2 == 0 ? value : value - 1 }
     private func makeError(_ message: String) -> NSError { NSError(domain: "FrameBoost", code: -1, userInfo: [NSLocalizedDescriptionKey: message]) }
-    private struct Frame { let image: CIImage; let pixelBuffer: CVPixelBuffer; let time: CMTime }
+    private struct Frame { let pixelBuffer: CVPixelBuffer; let image: CIImage; let time: CMTime }
 }
 
 private final class OpticalFlowEngine {
@@ -148,34 +173,37 @@ private final class OpticalFlowEngine {
             throw NSError(domain: "FrameBoost.OpticalFlow", code: 1, userInfo: [NSLocalizedDescriptionKey: "Optical-flow frames have different dimensions"])
         }
         let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: target, options: [:])
-        request.computationAccuracy = .high
+        request.computationAccuracy = .medium
         request.outputPixelFormat = kCVPixelFormatType_TwoComponent32Float
         let handler = VNImageRequestHandler(cvPixelBuffer: source, options: [:])
         try handler.perform([request])
-        guard let observation = request.results?.first as? VNPixelBufferObservation else {
-            throw NSError(domain: "FrameBoost.OpticalFlow", code: 2, userInfo: [NSLocalizedDescriptionKey: "Optical-flow result unavailable"])
-        }
+        guard let observation = request.results?.first as? VNPixelBufferObservation else { return Motion(dx: 0, dy: 0) }
+
         let flow = observation.pixelBuffer
         CVPixelBufferLockBaseAddress(flow, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(flow, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(flow) else { throw NSError(domain: "FrameBoost.OpticalFlow", code: 3, userInfo: [NSLocalizedDescriptionKey: "Optical-flow buffer unavailable"]) }
+        guard let base = CVPixelBufferGetBaseAddress(flow) else { return Motion(dx: 0, dy: 0) }
         let flowWidth = CVPixelBufferGetWidth(flow)
         let flowHeight = CVPixelBufferGetHeight(flow)
         let rowStride = CVPixelBufferGetBytesPerRow(flow) / MemoryLayout<Float>.size
         let values = base.assumingMemoryBound(to: Float.self)
-        var xs: [Float] = []; var ys: [Float] = []
-        let stepX = max(flowWidth / 16, 1); let stepY = max(flowHeight / 16, 1)
+        var xs: [Float] = []
+        var ys: [Float] = []
+        let stepX = max(flowWidth / 16, 1)
+        let stepY = max(flowHeight / 16, 1)
         for y in Swift.stride(from: stepY / 2, to: flowHeight, by: stepY) {
             for x in Swift.stride(from: stepX / 2, to: flowWidth, by: stepX) {
                 let index = y * rowStride + x * 2
-                let dx = values[index]; let dy = values[index + 1]
+                let dx = values[index]
+                let dy = values[index + 1]
                 if dx.isFinite && dy.isFinite && abs(dx) < 256 && abs(dy) < 256 { xs.append(dx); ys.append(dy) }
             }
         }
         guard !xs.isEmpty else { return Motion(dx: 0, dy: 0) }
         xs.sort(); ys.sort()
-        let trim = max(xs.count / 10, 0)
-        let lo = trim; let hi = max(xs.count - trim, lo + 1)
+        let trim = xs.count / 10
+        let lo = trim
+        let hi = max(xs.count - trim, lo + 1)
         let dx = xs[lo..<hi].reduce(0, +) / Float(hi - lo)
         let dy = ys[lo..<hi].reduce(0, +) / Float(hi - lo)
         return Motion(dx: CGFloat(dx), dy: CGFloat(dy))
