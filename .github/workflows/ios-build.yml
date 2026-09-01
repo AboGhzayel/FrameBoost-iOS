@@ -1,0 +1,28 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Validate project structure
+        run: |
+          test -f FrameBoost/FrameBoostApp.swift
+          test -f FrameBoost/ContentView.swift
+          test -f FrameBoost/VideoProcessor.swift
+          echo "FrameBoost source structure OK"
