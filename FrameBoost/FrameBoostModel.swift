@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AVFoundation
+import CoreImage
 
 struct FrameBoostSettings: Equatable {
     var targetFPS: Int = 60
@@ -9,16 +10,10 @@ struct FrameBoostSettings: Equatable {
 }
 
 enum ProcessingMode: String, CaseIterable, Identifiable {
-    case auto = "Auto"
-    case onDevice = "On Device"
-    case cloud = "Cloud AI"
+    case auto = "Auto", onDevice = "On Device", cloud = "Cloud AI"
     var id: String { rawValue }
     var subtitle: String {
-        switch self {
-        case .auto: return "Best route for speed and quality"
-        case .onDevice: return "Private • works offline • RIFE 4.25"
-        case .cloud: return "Server GPU • internet required"
-        }
+        switch self { case .auto: return "Best route for speed and quality"; case .onDevice: return "Private • works offline • RIFE 4.25"; case .cloud: return "Server GPU • internet required" }
     }
 }
 
@@ -33,15 +28,17 @@ final class FrameBoostModel: ObservableObject {
     @Published var selectedProfile: ProcessingProfile = .tiktokPro
     @Published var processingMode: ProcessingMode = .auto
     @Published var cloudStatus: String?
+    @Published var preprocessingProfile: PreprocessingProfile = .turbo
 
     private let processor = VideoProcessor()
     private let cloudProcessor = CloudVideoProcessor()
+    private let preprocessor = VideoPreprocessor()
     private var processingTask: Task<Void, Never>?
 
     func startProcessing() {
         guard let input = selectedVideoURL, !isProcessing else { return }
         isProcessing = true; progress = 0; errorMessage = nil; cloudStatus = nil; outputURL = nil
-        let profile = selectedProfile; settings.targetFPS = profile.targetFPS; let requestedMode = processingMode
+        let profile = selectedProfile; settings.targetFPS = profile.targetFPS; let requestedMode = processingMode; let prep = preprocessingProfile
         processingTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -57,49 +54,75 @@ final class FrameBoostModel: ObservableObject {
                 case .smooth60: options.bitrate = 12_000_000
                 }
                 let mode: ProcessingMode = requestedMode == .auto ? (cloudProcessor.isConfigured ? .cloud : .onDevice) : requestedMode
+                var sourceForAI = input
                 if mode == .cloud {
+                    cloudStatus = "Preparing video…"
+                    sourceForAI = try await preprocessor.reencode(url: input, profile: prep) { [weak self] value in Task { @MainActor in self?.progress = value * 0.20; self?.cloudStatus = "Preparing • \(Int(value * 100))%" } }
                     guard cloudProcessor.isConfigured else { throw NSError(domain: "FrameBoost.Cloud", code: 2001, userInfo: [NSLocalizedDescriptionKey: "Cloud AI is not configured. Use On Device for now."]) }
                     cloudStatus = "Uploading securely…"
-                    outputURL = try await cloudProcessor.process(url: input, options: options) { [weak self] value, status in Task { @MainActor in self?.progress = value; self?.cloudStatus = status } }
+                    outputURL = try await cloudProcessor.process(url: sourceForAI, options: options) { [weak self] value, status in Task { @MainActor in self?.progress = 0.20 + value * 0.80; self?.cloudStatus = status } }
                 } else {
-                    outputURL = try await processor.process(url: input, options: options) { [weak self] value in Task { @MainActor in self?.progress = value } }
+                    outputURL = try await processor.process(url: sourceForAI, options: options) { [weak self] value in Task { @MainActor in self?.progress = value } }
                 }
+                if sourceForAI != input { try? FileManager.default.removeItem(at: sourceForAI) }
                 try Task.checkCancellation(); progress = 1; isProcessing = false; processingTask = nil; cloudStatus = nil
             } catch is CancellationError { isProcessing = false; processingTask = nil; errorMessage = "Processing cancelled."; cloudStatus = nil
             } catch { isProcessing = false; processingTask = nil; errorMessage = "Export failed: \(error.localizedDescription)"; cloudStatus = nil }
         }
     }
-
     func process() async { startProcessing() }
     func cancel() { processingTask?.cancel(); processingTask = nil; cloudProcessor.cancel(); isProcessing = false; errorMessage = "Processing cancelled."; cloudStatus = nil }
 }
 
-/// HTTPS client for a FrameBoost-compatible cloud inference service. No API key is embedded in the IPA.
+final class VideoPreprocessor: @unchecked Sendable {
+    private let context = CIContext(options: [CIContextOption.cacheIntermediates: false])
+    func reencode(url: URL, profile: PreprocessingProfile, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+        let asset = AVAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw error("No video track") }
+        let duration = max(CMTimeGetSeconds(try await asset.load(.duration)), 0.001)
+        let sourceFPS = max(Double(try await track.load(.nominalFrameRate)), 1)
+        let size = try await track.load(.naturalSize).applying(try await track.load(.preferredTransform))
+        let width = max(Int(abs(size.width.rounded())), 2) & ~1
+        let height = max(Int(abs(size.height.rounded())), 2) & ~1
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-Preprocessed-\(UUID().uuidString).mp4")
+        let reader = try AVAssetReader(asset: asset)
+        let ro = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
+        ro.alwaysCopiesSampleData = false; reader.add(ro)
+        let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
+        let fps = max(Int(sourceFPS.rounded()), 1)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: profile.bitrate, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, AVVideoExpectedSourceFrameRateKey: fps, AVVideoMaxKeyFrameIntervalKey: fps * 2]])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
+        writer.add(input); guard writer.startWriting() else { throw writer.error ?? error("Unable to start preprocessing") }; writer.startSession(atSourceTime: .zero); guard reader.startReading() else { throw reader.error ?? error("Unable to read source") }
+        while let sample = ro.copyNextSampleBuffer() {
+            try Task.checkCancellation(); guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+            let time = CMSampleBufferGetPresentationTimeStamp(sample)
+            var image = CIImage(cvPixelBuffer: buffer)
+            if profile == .motionBlur { image = image.applyingFilter("CIMotionBlur", parameters: [kCIInputRadiusKey: 1.2, kCIInputAngleKey: 0.0]) }
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(1)) }
+            var out: CVPixelBuffer?
+            guard CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &out) == kCVReturnSuccess, let out else { throw error("Unable to allocate preprocessing frame") }
+            let e = image.extent.integral; let normalized = image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)); let sx = CGFloat(width) / max(e.width, 1); let sy = CGFloat(height) / max(e.height, 1); let final = normalized.transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))); context.render(final, to: out)
+            guard adaptor.append(out, withPresentationTime: time) else { throw writer.error ?? error("Failed to append preprocessing frame") }
+            progress(min(max(CMTimeGetSeconds(time) / duration, 0), 1))
+        }
+        input.markAsFinished(); await writer.finishWriting(); guard writer.status == .completed else { throw writer.error ?? error("Preprocessing export failed") }; progress(1); return output
+    }
+    private func error(_ message: String) -> NSError { NSError(domain: "FrameBoost.Preprocessor", code: -1, userInfo: [NSLocalizedDescriptionKey: message]) }
+}
+
 final class CloudVideoProcessor: @unchecked Sendable {
     private var task: URLSessionTask?
-    var endpoint: URL? {
-        guard let raw = UserDefaults.standard.string(forKey: "FrameBoostCloudEndpoint"), let url = URL(string: raw), url.scheme == "https" else { return nil }
-        return url
-    }
+    var endpoint: URL? { guard let raw = UserDefaults.standard.string(forKey: "FrameBoostCloudEndpoint"), let url = URL(string: raw), url.scheme == "https" else { return nil }; return url }
     var isConfigured: Bool { endpoint != nil }
-
     func process(url: URL, options: VideoProcessingOptions, progress: @escaping @Sendable (Double, String) -> Void) async throws -> URL {
         guard let endpoint else { throw NSError(domain: "FrameBoost.Cloud", code: 2002, userInfo: [NSLocalizedDescriptionKey: "Invalid cloud endpoint."]) }
-        var request = URLRequest(url: endpoint); request.httpMethod = "POST"
-        let boundary = "FrameBoost-\(UUID().uuidString)"; request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let data = try Data(contentsOf: url)
-        let payload = try JSONSerialization.data(withJSONObject: ["targetFPS": options.targetFPS, "preserveAudio": true, "quality": 0.92])
-        var body = Data(); func append(_ s: String) { body.append(s.data(using: .utf8)!) }
-        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"options\"\r\nContent-Type: application/json\r\n\r\n"); body.append(payload); append("\r\n")
-        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"input.mov\"\r\nContent-Type: video/quicktime\r\n\r\n"); body.append(data); append("\r\n--\(boundary)--\r\n")
-        request.httpBody = body; progress(0.05, "Uploading securely…")
-        let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw NSError(domain: "FrameBoost.Cloud", code: 2003, userInfo: [NSLocalizedDescriptionKey: String(data: responseData, encoding: .utf8) ?? "Cloud service returned an error."]) }
-        progress(0.75, "Downloading enhanced video…")
-        guard let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any], let outputString = object["outputURL"] as? String, let outputURL = URL(string: outputString), outputURL.scheme == "https" else { throw NSError(domain: "FrameBoost.Cloud", code: 2004, userInfo: [NSLocalizedDescriptionKey: "Cloud service did not return a valid output URL."]) }
-        let (outputData, _) = try await URLSession.shared.data(from: outputURL)
-        let destination = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoostCloud-\(UUID().uuidString).mp4")
-        try outputData.write(to: destination, options: .atomic); progress(1, "Cloud render complete"); return destination
+        var request = URLRequest(url: endpoint); request.httpMethod = "POST"; let boundary = "FrameBoost-\(UUID().uuidString)"; request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let data = try Data(contentsOf: url); let payload = try JSONSerialization.data(withJSONObject: ["targetFPS": options.targetFPS, "preserveAudio": true, "quality": 0.92]); var body = Data(); func append(_ s: String) { body.append(s.data(using: .utf8)!) }
+        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"options\"\r\nContent-Type: application/json\r\n\r\n"); body.append(payload); append("\r\n"); append("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"input.mp4\"\r\nContent-Type: video/mp4\r\n\r\n"); body.append(data); append("\r\n--\(boundary)--\r\n")
+        request.httpBody = body; progress(0.05, "Uploading securely…"); let (responseData, response) = try await URLSession.shared.data(for: request); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw NSError(domain: "FrameBoost.Cloud", code: 2003, userInfo: [NSLocalizedDescriptionKey: String(data: responseData, encoding: .utf8) ?? "Cloud service returned an error."]) }
+        progress(0.75, "Downloading enhanced video…"); guard let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any], let outputString = object["outputURL"] as? String, let outputURL = URL(string: outputString), outputURL.scheme == "https" else { throw NSError(domain: "FrameBoost.Cloud", code: 2004, userInfo: [NSLocalizedDescriptionKey: "Cloud service did not return a valid output URL."]) }
+        let (outputData, _) = try await URLSession.shared.data(from: outputURL); let destination = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoostCloud-\(UUID().uuidString).mp4"); try outputData.write(to: destination, options: .atomic); progress(1, "Cloud render complete"); return destination
     }
     func cancel() { task?.cancel(); task = nil }
 }
