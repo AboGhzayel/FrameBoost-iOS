@@ -10,7 +10,7 @@ struct VideoProcessingOptions: Sendable {
     var forceSDR: Bool = false
     var motionBlur: Bool = false
     var motionBlurStrength: CGFloat = 0.0
-    var codec: AVVideoCodecType = .h264
+    var codec: AVVideoCodecType = AVVideoCodecType.h264
     var profileLevel: String = AVVideoProfileLevelH264HighAutoLevel
     var preserveSourceFPS: Bool = true
     var colorPrimaries: String = AVVideoColorPrimaries_ITU_R_709_2
@@ -33,7 +33,7 @@ final class VideoProcessor {
         let sourceFPS = try await track.load(.nominalFrameRate)
         let fps = max(Int(sourceFPS.rounded()), 1)
         var options = VideoProcessingOptions(targetFPS: fps, bitrate: profile.bitrate)
-        options.codec = .h264
+        options.codec = AVVideoCodecType.h264
         options.profileLevel = AVVideoProfileLevelH264HighAutoLevel
         options.preserveSourceFPS = true
         if profile == .motionBlur { options.motionBlur = true; options.motionBlurStrength = CGFloat(profile.blurStrength) }
@@ -88,8 +88,9 @@ final class VideoProcessor {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4"); var completed = false; defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
         let reader = try AVAssetReader(asset: asset); let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferIOSurfacePropertiesKey as String: [:]]); readerOutput.alwaysCopiesSampleData = false; reader.add(readerOutput)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let exportFPS = max(options.targetFPS, 1); let profile = options.codec == .hevc ? AVVideoProfileLevelHEVCMainAutoLevel : options.profileLevel
-        let compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: profile, AVVideoMaxKeyFrameIntervalKey: exportFPS * 2, AVVideoExpectedSourceFrameRateKey: exportFPS, AVVideoAllowFrameReorderingKey: true, AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: options.colorPrimaries, AVVideoTransferFunctionKey: options.transferFunction, AVVideoYCbCrMatrixKey: options.yCbCrMatrix]]
+        let exportFPS = max(options.targetFPS, 1); let profile: String? = options.codec == AVVideoCodecType.hevc ? nil : options.profileLevel
+        var compression: [String: Any] = [AVVideoAverageBitRateKey: options.bitrate, AVVideoMaxKeyFrameIntervalKey: exportFPS * 2, AVVideoExpectedSourceFrameRateKey: exportFPS, AVVideoAllowFrameReorderingKey: true, AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: options.colorPrimaries, AVVideoTransferFunctionKey: options.transferFunction, AVVideoYCbCrMatrixKey: options.yCbCrMatrix]]
+        if let profile { compression[AVVideoProfileLevelKey] = profile }
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: options.codec, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: compression]); input.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         writer.add(input); guard writer.startWriting() else { throw writer.error ?? makeError("Unable to start video export") }; writer.startSession(atSourceTime: .zero); guard reader.startReading() else { writer.cancelWriting(); throw reader.error ?? makeError("Unable to read selected video") }
@@ -107,7 +108,7 @@ final class VideoProcessor {
             }
             if let processingError { reader.cancelReading(); writer.cancelWriting(); throw processingError }; if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }; if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         }
-        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Video reader failed") }; if writer.status == .cancelled { throw makeError("Video writer cancelled") }; if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
+        if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Video reader failed") }; if reader.status == .cancelled { writer.cancelWriting(); throw makeError("Video reader cancelled") }; if writer.status == .cancelled { throw makeError("Video writer cancelled") }; if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         input.markAsFinished(); await writer.finishWriting(); guard writer.status == .completed else { throw writer.error ?? makeError("Video export failed") }; completed = true; progress(1); return outputURL
     }
 
