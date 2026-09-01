@@ -62,4 +62,5 @@ A10000700000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A1
 A10000800000000000000001 = {isa = XCConfigurationList; buildConfigurations = (A10000810000000000000001,A10000820000000000000001); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 rootObject = A10000600000000000000001;
+};
 }
