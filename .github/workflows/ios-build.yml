@@ -31,9 +31,10 @@ jobs:
       - name: Prepare Python 3.12 for RIFE conversion
         run: |
           set -euo pipefail
-          command -v python3.12
-          python3.12 --version
-          python3.12 -m venv "$RUNNER_TEMP/rife-venv"
+          if command -v python3.12 >/dev/null 2>&1; then PYTHON_BIN="$(command -v python3.12)"; else PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3.12"; fi
+          test -x "$PYTHON_BIN"
+          "$PYTHON_BIN" --version
+          "$PYTHON_BIN" -m venv "$RUNNER_TEMP/rife-venv"
           source "$RUNNER_TEMP/rife-venv/bin/activate"
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
@@ -50,17 +51,7 @@ jobs:
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -sdk "$IPHONEOS_SDK" \
-            -configuration Release \
-            -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
-            clean build \
-            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
       - name: Validate app bundle
         run: |
           set -euo pipefail
@@ -73,12 +64,8 @@ jobs:
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
-          rm -rf Payload FrameBoost-unsigned.ipa
-          mkdir -p Payload
-          cp -R "$APP" Payload/FrameBoost.app
-          /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
-          rm -rf Payload
-          unzip -t FrameBoost-unsigned.ipa
+          rm -rf Payload FrameBoost-unsigned.ipa; mkdir -p Payload; cp -R "$APP" Payload/FrameBoost.app
+          /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload; rm -rf Payload; unzip -t FrameBoost-unsigned.ipa
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
@@ -86,7 +73,6 @@ jobs:
           path: FrameBoost-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
-
   swift-validation:
     name: Swift package validation on macOS 26
     runs-on: macos-26
