@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 
+@MainActor
 struct ContentView: View {
     @StateObject private var model = FrameBoostModel()
     @State private var selectedItem: PhotosPickerItem?
@@ -35,13 +36,11 @@ struct ContentView: View {
             guard let item = selectedItem else { return }
             do {
                 guard let imported = try await item.loadTransferable(type: VideoTransferable.self) else { throw ImportError.failed }
-                await MainActor.run {
-                    model.selectedVideoURL = imported.url
-                    model.outputURL = nil
-                    model.errorMessage = nil
-                }
+                model.selectedVideoURL = imported.url
+                model.outputURL = nil
+                model.errorMessage = nil
             } catch {
-                await MainActor.run { model.errorMessage = "Could not import this video. Please try again." }
+                model.errorMessage = "Could not import this video. Please try again."
             }
         }
     }
