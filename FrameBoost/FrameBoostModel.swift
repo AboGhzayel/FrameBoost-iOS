@@ -28,15 +28,10 @@ final class FrameBoostModel: ObservableObject {
         outputURL = nil
 
         do {
-            let result = try await processor.process(
-                url: input,
-                targetFPS: targetFPS,
-                progress: { [weak self] value in
-                    Task { @MainActor in
-                        self?.progress = value
-                    }
-                }
-            )
+            let result = try await processor.process(url: input, targetFPS: targetFPS) { [weak self] value in
+                Task { @MainActor in self?.progress = value }
+            }
+            guard !Task.isCancelled else { throw CancellationError() }
             outputURL = result
             progress = 1
         } catch is CancellationError {
@@ -44,7 +39,6 @@ final class FrameBoostModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
-
         isProcessing = false
     }
 
