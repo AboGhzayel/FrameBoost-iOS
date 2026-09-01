@@ -26,10 +26,9 @@ final class VideoProcessor {
         let duration = try await asset.load(.duration)
         let durationSeconds = max(CMTimeGetSeconds(duration), 0.001)
         let naturalSize = try await track.load(.naturalSize)
-        let transform = try await track.load(.preferredTransform)
         let nominal = try await track.load(.nominalFrameRate)
         let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
-        let oriented = naturalSize.applying(transform)
+        let oriented = naturalSize.applying(try await track.load(.preferredTransform))
         let sourceWidth = even(max(Int(abs(oriented.width).rounded()), 2))
         let sourceHeight = even(max(Int(abs(oriented.height).rounded()), 2))
         let width = even(max(options.exportWidth ?? sourceWidth, 2))
@@ -39,8 +38,6 @@ final class VideoProcessor {
         defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
 
         let reader = try AVAssetReader(asset: asset)
-        // Decode directly to BGRA. This avoids relying on Core Image's YUV conversion
-        // during export and prevents black frames on devices/codecs with unusual range metadata.
         let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:]
@@ -75,7 +72,6 @@ final class VideoProcessor {
 
         var previousBuffer: CVPixelBuffer?
         var previousTime = CMTime.invalid
-        var lastWrittenTime = CMTime.invalid
         var frameIndex = 0
 
         while let sample = readerOutput.copyNextSampleBuffer() {
@@ -87,26 +83,18 @@ final class VideoProcessor {
             autoreleasepool {
                 do {
                     if sourceFPS >= 59.0 {
-                        let image = CIImage(cvPixelBuffer: buffer)
-                        try appendSync(image, at: time, adaptor: adaptor, writer: writer, width: width, height: height)
-                        lastWrittenTime = time
+                        try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
                     } else if sourceFPS >= 20.0 {
-                        if let previousBuffer, previousTime.isValid, time > previousTime {
-                            if rife.isAvailable {
-                                do {
-                                    let generated = try rife.interpolate(first: previousBuffer, second: buffer)
-                                    try appendSync(CIImage(cvPixelBuffer: generated), at: CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5)), adaptor: adaptor, writer: writer, width: width, height: height)
-                                } catch {
-                                    // Fall back to the source frame if RIFE is unavailable/incompatible.
-                                }
+                        if let previousBuffer, previousTime.isValid, time > previousTime, rife.isAvailable {
+                            do {
+                                let generated = try rife.interpolate(first: previousBuffer, second: buffer)
+                                let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5))
+                                try appendSync(CIImage(cvPixelBuffer: generated), at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height)
+                            } catch {
+                                // Safe fallback to source frame.
                             }
-                            try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
-                            lastWrittenTime = time
-                        } else {
-                            let outputTime = CMTime(value: Int64(frameIndex) * 2, timescale: 60)
-                            try appendSync(CIImage(cvPixelBuffer: buffer), at: outputTime, adaptor: adaptor, writer: writer, width: width, height: height)
-                            lastWrittenTime = outputTime
                         }
+                        try appendSync(CIImage(cvPixelBuffer: buffer), at: time, adaptor: adaptor, writer: writer, width: width, height: height)
                     } else {
                         throw makeError("Unsupported source frame rate")
                     }
@@ -120,16 +108,14 @@ final class VideoProcessor {
             }
 
             if let processingError {
-                reader.cancelReading()
-                writer.cancelWriting()
-                throw processingError
+                reader.cancelReading(); writer.cancelWriting(); throw processingError
             }
             if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
             if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         }
 
         if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? makeError("Video reader failed") }
-        if writer.status == .cancelled { throw writer.error ?? makeError("Video writer cancelled") }
+        if writer.status == .cancelled { throw makeError("Video writer cancelled") }
         if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
         input.markAsFinished()
         await writer.finishWriting()
@@ -145,19 +131,19 @@ final class VideoProcessor {
             Thread.sleep(forTimeInterval: 0.001)
         }
         guard let pool = adaptor.pixelBufferPool else { throw makeError("Pixel buffer pool unavailable") }
-        var buffer: CVPixelBuffer?
-        let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
-        guard result == kCVReturnSuccess, let buffer else { throw makeError("Unable to allocate video frame (code \(result))") }
+        var outputBuffer: CVPixelBuffer?
+        let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer)
+        guard result == kCVReturnSuccess, let outputBuffer else { throw makeError("Unable to allocate video frame (code \(result))") }
+        let extent = image.extent.integral
+        guard extent.width > 0, extent.height > 0 else { throw makeError("Invalid video frame extent") }
         autoreleasepool {
-            let e = image.extent.integral
-            guard e.width > 0, e.height > 0 else { return }
-            let normalized = image.cropped(to: e)
-            let sx = CGFloat(width) / e.width
-            let sy = CGFloat(height) / e.height
-            let finalImage = normalized.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)).transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-            context.render(finalImage, to: buffer!)
+            let normalized = image.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+            let sx = CGFloat(width) / extent.width
+            let sy = CGFloat(height) / extent.height
+            let finalImage = normalized.transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+            context.render(finalImage, to: outputBuffer)
         }
-        guard adaptor.append(buffer!, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append video frame") }
+        guard adaptor.append(outputBuffer, withPresentationTime: time) else { throw writer.error ?? makeError("Failed to append video frame") }
     }
 
     private func even(_ value: Int) -> Int { value % 2 == 0 ? value : value - 1 }
