@@ -45,10 +45,14 @@ jobs:
           import re, sys
           from pathlib import Path
           p=Path(sys.argv[1]); text=p.read_text()
+          # Xcode PBX object IDs are exactly 24 hexadecimal characters.
           defined=set(re.findall(r'^([A-Fa-f0-9]{24})\s*=', text, re.M))
           refs=set(re.findall(r'(?<![A-Za-z0-9])([A-Fa-f0-9]{24})(?![A-Za-z0-9])', text))
           dangling=sorted(refs-defined)
-          malformed=sorted(set(re.findall(r'(?<![A-Za-z0-9])([A-Fa-f0-9]{25,})(?![A-Za-z0-9])', text)))
+          # Only inspect tokens that look like PBX IDs (start with A), avoiding
+          # unrelated numeric build settings such as 2147483647.
+          pbx_tokens=sorted(set(re.findall(r'(?<![A-Za-z0-9])(A[A-Fa-f0-9]+)(?![A-Za-z0-9])', text)))
+          malformed=sorted(x for x in pbx_tokens if len(x) != 24)
           print(f"Defined 24-char objects: {len(defined)}")
           print(f"Referenced 24-char objects: {len(refs)}")
           if malformed:
@@ -57,7 +61,8 @@ jobs:
               raise SystemExit(1)
           if dangling:
               print("ERROR: dangling PBX references:")
-              for x in dangling: print(f"  {x}")
+              for x in dangling:
+                  print(f"  {x}")
               raise SystemExit(1)
           print("PBX object graph: OK")
           PY
