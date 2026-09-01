@@ -46,14 +46,14 @@ final class FrameBoostModel: ObservableObject {
         }
 
         isProcessing = false
-        processingTask = nil
     }
 
     func startProcessing() {
-        guard processingTask == nil else { return }
+        guard processingTask == nil, selectedVideoURL != nil else { return }
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.process()
+            self.processingTask = nil
         }
     }
 
