@@ -19,37 +19,43 @@ final class FrameBoostModel: ObservableObject {
     private let processor = VideoProcessor()
     private var processingTask: Task<Void, Never>?
 
-    func process() async {
+    func startProcessing() {
         guard let input = selectedVideoURL, !isProcessing else { return }
-        let targetFPS = settings.targetFPS
         isProcessing = true
         progress = 0
         errorMessage = nil
         outputURL = nil
-
-        do {
-            let result = try await processor.process(url: input, targetFPS: targetFPS) { [weak self] value in
-                Task { @MainActor in self?.progress = value }
-            }
-            guard !Task.isCancelled else { throw CancellationError() }
-            outputURL = result
-            progress = 1
-        } catch is CancellationError {
-            errorMessage = "Processing cancelled."
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isProcessing = false
-    }
-
-    func startProcessing() {
-        guard processingTask == nil, selectedVideoURL != nil else { return }
-        processingTask = Task { @MainActor [weak self] in
+        let fps = settings.targetFPS
+        processingTask = Task { [weak self] in
             guard let self else { return }
-            await self.process()
-            self.processingTask = nil
+            do {
+                let result = try await processor.process(url: input, targetFPS: fps) { value in
+                    Task { @MainActor [weak self] in self?.progress = value }
+                }
+                try Task.checkCancellation()
+                await MainActor.run {
+                    self.outputURL = result
+                    self.progress = 1
+                    self.isProcessing = false
+                    self.processingTask = nil
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self.isProcessing = false
+                    self.processingTask = nil
+                    self.errorMessage = "Processing cancelled."
+                }
+            } catch {
+                await MainActor.run {
+                    self.isProcessing = false
+                    self.processingTask = nil
+                    self.errorMessage = "Export failed: \(error.localizedDescription)"
+                }
+            }
         }
     }
+
+    func process() async { startProcessing() }
 
     func cancel() {
         processingTask?.cancel()
