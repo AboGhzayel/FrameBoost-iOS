@@ -17,7 +17,7 @@ final class VideoProcessor {
     private let rife = RIFEEngine()
 
     func process(url: URL, targetFPS: Int, progress: @escaping (Double) -> Void) async throws -> URL {
-        try await process(url: url, options: VideoProcessingOptions(targetFPS: 60), progress: progress)
+        try await process(url: url, options: VideoProcessingOptions(targetFPS: targetFPS), progress: progress)
     }
 
     func process(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
@@ -62,7 +62,7 @@ final class VideoProcessor {
             try Task.checkCancellation()
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
-            var error: Error?
+            var processingError: Error?
 
             autoreleasepool {
                 do {
@@ -73,21 +73,18 @@ final class VideoProcessor {
                             lastWrittenTime = time
                         }
                     } else if sourceFPS >= 20.0 {
-                        // True 2x interpolation path. It is enabled only when the validated
-                        // RIFE Core ML model is bundled; otherwise use a safe duplicate fallback.
                         if let previousBuffer, previousTime.isValid, time > previousTime {
                             if rife.isAvailable {
                                 do {
                                     let generated = try rife.interpolate(first: previousBuffer, second: buffer)
-                                    let generatedImage = CIImage(cvPixelBuffer: generated)
+                                    let generatedImage = normalizedImage(CIImage(cvPixelBuffer: generated), transform: transform)
                                     let midpoint = CMTimeAdd(previousTime, CMTimeMultiplyByFloat64(time - previousTime, multiplier: 0.5))
                                     if midpoint > lastWrittenTime {
                                         try appendSync(generatedImage, at: midpoint, adaptor: adaptor, writer: writer, width: width, height: height)
                                         lastWrittenTime = midpoint
                                     }
                                 } catch {
-                                    // A model/schema failure must not break export.
-                                    // Fall back to a real source frame below.
+                                    // Safe fallback to source frames if the model is unavailable/incompatible.
                                 }
                             }
                             let image = normalizedImage(CIImage(cvPixelBuffer: buffer), transform: transform)
@@ -109,16 +106,16 @@ final class VideoProcessor {
                     previousBuffer = buffer
                     previousTime = time
                     frameIndex += 1
-                } catch {
-                    error = error
+                } catch let caughtError {
+                    processingError = caughtError
                 }
                 progress(min(max(CMTimeGetSeconds(time) / durationSeconds, 0), 1))
             }
 
-            if let error {
+            if let processingError {
                 reader.cancelReading()
                 writer.cancelWriting()
-                throw error
+                throw processingError
             }
             if reader.status == .failed { throw reader.error ?? makeError("Video reader failed") }
             if writer.status == .failed { throw writer.error ?? makeError("Video writer failed") }
