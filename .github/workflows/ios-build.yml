@@ -16,7 +16,7 @@ env:
 jobs:
   ios-build:
     name: Build clean unsigned IPA with RIFE
-    runs-on: macos-26-arm64
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,7 +76,7 @@ jobs:
           retention-days: 14
   swift-validation:
     name: Swift package validation on macOS 26
-    runs-on: macos-26-arm64
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
