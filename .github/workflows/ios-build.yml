@@ -63,10 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           test -d "$RIFE_MODEL"
-          if ! grep -q 'RIFE_4_25.mlpackage' FrameBoost/FrameBoost.xcodeproj/project.pbxproj; then
-            echo "ERROR: RIFE_4_25.mlpackage is not referenced by the Xcode project"
-            exit 1
-          fi
+          grep -q 'RIFE_4_25.mlpackage' FrameBoost/FrameBoost.xcodeproj/project.pbxproj
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
@@ -77,20 +74,11 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
           test -d "$APP"
-          echo "Searching app for compiled Core ML model..."
-          find "$APP" -type d \( -name '*.mlmodelc' -o -name '*.mlpackage' \) -print | sort
           RIFE_COMPILED="$APP/RIFE_4_25.mlmodelc"
-          if [ ! -d "$RIFE_COMPILED" ]; then
-            echo "ERROR: Xcode did not produce RIFE_4_25.mlmodelc at expected path"
-            find "$RUNNER_TEMP/FrameBoostDerived" -type d -name 'RIFE_4_25.mlmodelc' -print | sort
-            exit 1
-          fi
-          # A compiled .mlmodelc is a Core ML bundle; coremldata.bin is the required compiled payload.
+          test -d "$RIFE_COMPILED"
           test -f "$RIFE_COMPILED/coremldata.bin"
           echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
-          echo "Compiled RIFE model: $RIFE_COMPILED"
           du -sh "$RIFE_COMPILED"
-          find "$RIFE_COMPILED" -maxdepth 2 -type f -print | sort
       - name: Validate app bundle
         run: |
           set -euo pipefail
@@ -100,11 +88,15 @@ jobs:
           test -f "$APP/FrameBoost"
           ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
           ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
-          echo "Bundle ID: $ACTUAL_BUNDLE_ID"
-          echo "Minimum OS: $ACTUAL_MIN_OS"
-          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
-          test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
-          file "$APP/FrameBoost" | grep -Eiq 'Mach-O.*arm64|arm64.*Mach-O'
+          echo "Bundle ID: [$ACTUAL_BUNDLE_ID]"
+          echo "Minimum OS: [$ACTUAL_MIN_OS]"
+          [ "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID" ]
+          [ "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET" ]
+          echo "Executable architecture:"
+          /usr/bin/file "$APP/FrameBoost"
+          /usr/bin/otool -hv "$APP/FrameBoost" | head -n 3
+          /usr/bin/lipo -info "$APP/FrameBoost" || true
+          /usr/bin/otool -hv "$APP/FrameBoost" | grep -Eq 'ARM64|arm64'
           test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
           echo "RIFE compiled model is embedded and validated"
       - name: Package clean IPA
