@@ -30,16 +30,11 @@ jobs:
       - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then
-            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
-          fi
+          if [ -d /Applications/Xcode_26.6.app/Contents/Developer ]; then sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer; fi
           xcodebuild -version
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
-          case "$SDK_VERSION" in
-            26.*) ;;
-            *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;;
-          esac
+          case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
 
       - name: Install Python 3.12 and RIFE dependencies
         run: |
@@ -69,10 +64,28 @@ jobs:
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/RIFECompiled"
           mkdir -p "$RUNNER_TEMP/RIFECompiled"
-          xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled"
+          echo "Compiling $RIFE_MODEL with Xcode Core ML compiler..."
+          set +e
+          xcrun coremlcompiler compile "$RIFE_MODEL" "$RUNNER_TEMP/RIFECompiled" 2>&1 | tee "$RUNNER_TEMP/rife-compiler.log"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Core ML compiler failed (exit $STATUS). Package diagnostics:"
+            find "$RIFE_MODEL" -maxdepth 5 -type f -print | sort
+            echo "Manifest:"
+            cat "$RIFE_MODEL/Manifest.json"
+            echo "Compiler log:"
+            cat "$RUNNER_TEMP/rife-compiler.log"
+            exit "$STATUS"
+          fi
           RIFE_COMPILED="$(find "$RUNNER_TEMP/RIFECompiled" -type d -name 'RIFE_4_25.mlmodelc' -print -quit)"
-          test -n "$RIFE_COMPILED"
+          if [ -z "$RIFE_COMPILED" ]; then
+            echo "ERROR: coremlcompiler returned success but no .mlmodelc was produced"
+            find "$RUNNER_TEMP/RIFECompiled" -maxdepth 5 -print
+            exit 1
+          fi
           test -f "$RIFE_COMPILED/Manifest.json"
+          test -f "$RIFE_COMPILED/coremldata.bin"
           echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
           du -sh "$RIFE_COMPILED"
 
@@ -80,19 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/FrameBoostDerived"
-          xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -sdk "$IPHONEOS_SDK" \
-            -configuration Release \
-            -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" \
-            clean build \
-            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=YES \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
 
       - name: Embed compiled RIFE model in app bundle
         run: |
@@ -103,31 +104,21 @@ jobs:
           rm -rf "$APP/RIFE_4_25.mlmodelc"
           ditto "$RIFE_COMPILED" "$APP/RIFE_4_25.mlmodelc"
           test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
+          test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
 
       - name: Validate app bundle
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
-          test -d "$APP"
-          test -f "$APP/Info.plist"
-          test -f "$APP/FrameBoost"
-
+          test -d "$APP"; test -f "$APP/Info.plist"; test -f "$APP/FrameBoost"
           ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
           ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
-          echo "Bundle ID: $ACTUAL_BUNDLE_ID"
-          echo "Minimum OS: $ACTUAL_MIN_OS"
-          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
-          test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
-
-          echo "Executable type:"
-          file "$APP/FrameBoost"
+          echo "Bundle ID: $ACTUAL_BUNDLE_ID"; echo "Minimum OS: $ACTUAL_MIN_OS"
+          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"; test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
           file "$APP/FrameBoost" | grep -Eiq 'Mach-O.*arm64|arm64.*Mach-O'
-
-          echo "Lipo information (diagnostic only):"
           xcrun lipo -info "$APP/FrameBoost" || true
-
-          test -d "$APP/RIFE_4_25.mlmodelc"
           test -f "$APP/RIFE_4_25.mlmodelc/Manifest.json"
+          test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
           echo "RIFE compiled model is embedded and validated"
 
       - name: Package clean IPA
@@ -140,7 +131,7 @@ jobs:
           /usr/bin/zip -X -qry FrameBoost-unsigned.ipa Payload
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
-          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/Manifest.json' >/dev/null
+          unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/coremldata.bin' >/dev/null
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
