@@ -3,11 +3,23 @@ import AVFoundation
 import CoreImage
 import Vision
 
+struct VideoProcessingOptions: Sendable {
+    var targetFPS: Int = 60
+    var exportWidth: Int?
+    var exportHeight: Int?
+    var bitrate: Int = 10_000_000
+    var forceSDR: Bool = false
+}
+
 final class VideoProcessor {
     private let context = CIContext(options: [CIContextOption.cacheIntermediates: false])
     private let opticalFlow = OpticalFlowEngine()
 
     func process(url: URL, targetFPS: Int, progress: @escaping (Double) -> Void) async throws -> URL {
+        return try await process(url: url, options: VideoProcessingOptions(targetFPS: targetFPS), progress: progress)
+    }
+
+    func process(url: URL, options: VideoProcessingOptions, progress: @escaping (Double) -> Void) async throws -> URL {
         let asset = AVAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw makeError("No video track") }
         let duration = try await asset.load(.duration)
@@ -16,10 +28,12 @@ final class VideoProcessor {
         let transform = try await track.load(.preferredTransform)
         let nominal = try await track.load(.nominalFrameRate)
         let sourceFPS = nominal > 0 ? Double(nominal) : 30.0
-        let fps = max(Double(targetFPS), ceil(sourceFPS))
+        let fps = max(Double(options.targetFPS), ceil(sourceFPS))
         let oriented = naturalSize.applying(transform)
-        let width = even(max(Int(abs(oriented.width).rounded()), 2))
-        let height = even(max(Int(abs(oriented.height).rounded()), 2))
+        let sourceWidth = even(max(Int(abs(oriented.width).rounded()), 2))
+        let sourceHeight = even(max(Int(abs(oriented.height).rounded()), 2))
+        let width = even(max(options.exportWidth ?? sourceWidth, 2))
+        let height = even(max(options.exportHeight ?? sourceHeight, 2))
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("FrameBoost-\(UUID().uuidString).mp4")
 
         let reader = try AVAssetReader(asset: asset)
@@ -27,7 +41,7 @@ final class VideoProcessor {
         readerOutput.alwaysCopiesSampleData = false
         reader.add(readerOutput)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 10_000_000, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]])
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: options.bitrate, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]])
         input.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height])
         writer.add(input)
@@ -46,26 +60,25 @@ final class VideoProcessor {
                 let delta = CMTimeGetSeconds(time - previous.time)
                 if delta > 0.0001 && delta < 1.0 {
                     let count = min(max(Int((delta * fps).rounded()), 1), 8)
-                    let previousImage = previous.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-                    let currentImage = current.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-                    if previous.time > lastWrittenTime { try await append(previousImage, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height); lastWrittenTime = previous.time }
+                    let previousImage = previous.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(sourceWidth), height: CGFloat(sourceHeight)))
+                    let currentImage = current.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(sourceWidth), height: CGFloat(sourceHeight)))
+                    if previous.time > lastWrittenTime { try await append(previousImage, at: previous.time, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR); lastWrittenTime = previous.time }
                     if count > 1 {
                         let motion: OpticalFlowEngine.Motion?
-                        if width <= 1920 && height <= 1080 {
-                            motion = autoreleasepool { () -> OpticalFlowEngine.Motion? in try? opticalFlow.estimate(from: previous.pixelBuffer, to: current.pixelBuffer) }
-                        } else { motion = nil }
+                        if sourceWidth <= 1920 && sourceHeight <= 1080 { motion = autoreleasepool { () -> OpticalFlowEngine.Motion? in try? opticalFlow.estimate(from: previous.pixelBuffer, to: current.pixelBuffer) } }
+                        else { motion = nil }
                         for i in 1..<count {
                             try Task.checkCancellation()
                             let f = CGFloat(i) / CGFloat(count)
                             let candidate = CMTimeAdd(previous.time, CMTimeMultiplyByFloat64(time - previous.time, multiplier: Double(f)))
                             guard candidate > lastWrittenTime else { continue }
-                            try await append(makeIntermediate(previous: previousImage, current: currentImage, motion: motion, fraction: f), at: candidate, adaptor: adaptor, writer: writer, width: width, height: height)
+                            try await append(makeIntermediate(previous: previousImage, current: currentImage, motion: motion, fraction: f), at: candidate, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR)
                             lastWrittenTime = candidate
                         }
                     }
                 }
             } else {
-                try await append(current.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))), at: .zero, adaptor: adaptor, writer: writer, width: width, height: height)
+                try await append(current.image.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(sourceWidth), height: CGFloat(sourceHeight))), at: .zero, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR)
                 lastWrittenTime = .zero
             }
             previous = current
@@ -75,7 +88,7 @@ final class VideoProcessor {
         if let previous {
             let oneFrame = CMTime(value: 1, timescale: CMTimeScale(max(Int(fps.rounded()), 1)))
             let finalTime = previous.time > lastWrittenTime ? previous.time : CMTimeAdd(lastWrittenTime, oneFrame)
-            try await append(previous.image, at: finalTime, adaptor: adaptor, writer: writer, width: width, height: height)
+            try await append(previous.image, at: finalTime, adaptor: adaptor, writer: writer, width: width, height: height, forceSDR: options.forceSDR)
         }
         input.markAsFinished()
         await writer.finishWriting()
@@ -100,7 +113,7 @@ final class VideoProcessor {
         let transformed = image.transformed(by: transform); let e = transformed.extent
         return transformed.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
     }
-    private func append(_ image: CIImage, at time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter, width: Int, height: Int) async throws {
+    private func append(_ image: CIImage, at time: CMTime, adaptor: AVAssetWriterInputPixelBufferAdaptor, writer: AVAssetWriter, width: Int, height: Int, forceSDR: Bool) async throws {
         while !adaptor.assetWriterInput.isReadyForMoreMediaData {
             try Task.checkCancellation()
             if writer.status == .failed || writer.status == .cancelled { throw writer.error ?? makeError("Video writer stopped") }
