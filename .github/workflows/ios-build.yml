@@ -28,10 +28,11 @@ jobs:
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
           case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
-      - name: Prepare Python 3.12 for RIFE conversion
+      - name: Install Python 3.12 for RIFE conversion
         run: |
           set -euo pipefail
-          if command -v python3.12 >/dev/null 2>&1; then PYTHON_BIN="$(command -v python3.12)"; else PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3.12"; fi
+          brew list --versions python@3.12 >/dev/null 2>&1 || brew install python@3.12
+          PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3.12"
           test -x "$PYTHON_BIN"
           "$PYTHON_BIN" --version
           "$PYTHON_BIN" -m venv "$RUNNER_TEMP/rife-venv"
