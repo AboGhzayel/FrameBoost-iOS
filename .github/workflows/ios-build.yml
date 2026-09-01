@@ -26,6 +26,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Select Xcode 26 and discover SDK
         run: |
           set -euo pipefail
@@ -34,6 +35,7 @@ jobs:
           SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
           echo "IPHONEOS_SDK=iphoneos${SDK_VERSION}" >> "$GITHUB_ENV"
           case "$SDK_VERSION" in 26.*) ;; *) echo "Expected iOS 26 SDK, found ${SDK_VERSION}"; exit 1 ;; esac
+
       - name: Install Python 3.12 and RIFE dependencies
         run: |
           set -euo pipefail
@@ -44,6 +46,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install "coremltools==9.0" "torch==2.7.1" "safetensors==0.5.3" "numpy<2"
           python -c "import coremltools, torch; print('coremltools', coremltools.__version__); print('torch', torch.__version__)"
+
       - name: Export RIFE Core ML model
         run: |
           set -euo pipefail
@@ -59,26 +62,53 @@ jobs:
           print("Core ML package loads successfully")
           print("specificationVersion:", m.get_spec().specificationVersion)
           PY
-      - name: Ensure RIFE is a real Xcode model resource
+
+      - name: Verify RIFE Xcode resource reference
         run: |
           set -euo pipefail
           test -d "$RIFE_MODEL"
-          grep -q 'RIFE_4_25.mlpackage' FrameBoost/FrameBoost.xcodeproj/project.pbxproj
+          grep -n 'RIFE_4_25.mlpackage' FrameBoost/FrameBoost.xcodeproj/project.pbxproj
+          grep -n 'A10000270000000000000001' FrameBoost/FrameBoost.xcodeproj/project.pbxproj
+          grep -n 'A10000100000000000000006' FrameBoost/FrameBoost.xcodeproj/project.pbxproj
+
       - name: Clean build for iOS 26
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/FrameBoostDerived"
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk "$IPHONEOS_SDK" -configuration Release -derivedDataPath "$RUNNER_TEMP/FrameBoostDerived" clean build IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
       - name: Locate RIFE model in build products
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/FrameBoostDerived/Build/Products/Release-iphoneos/FrameBoost.app"
           test -d "$APP"
+          echo "Searching app and DerivedData for Core ML outputs..."
+          find "$RUNNER_TEMP/FrameBoostDerived" -type d \( -name '*.mlmodelc' -o -name '*.mlpackage' \) -print | sort
+          echo "App bundle model directories:"
+          find "$APP" -maxdepth 8 -type d \( -name '*.mlmodelc' -o -name '*.mlpackage' \) -print | sort
+
           RIFE_COMPILED="$APP/RIFE_4_25.mlmodelc"
-          test -d "$RIFE_COMPILED"
-          test -f "$RIFE_COMPILED/coremldata.bin"
+          if [ ! -d "$RIFE_COMPILED" ]; then
+            echo "ERROR: RIFE_4_25.mlmodelc is not at the expected app path"
+            echo "Matching compiled models in DerivedData:"
+            find "$RUNNER_TEMP/FrameBoostDerived" -type d -name 'RIFE_4_25.mlmodelc' -print | sort
+            echo "App root:"
+            find "$APP" -maxdepth 2 -print | sort
+            exit 1
+          fi
+
+          echo "RIFE compiled bundle found: $RIFE_COMPILED"
+          echo "Compiled RIFE contents:"
+          find "$RIFE_COMPILED" -maxdepth 3 -print | sort
+
+          if [ ! -f "$RIFE_COMPILED/coremldata.bin" ]; then
+            echo "ERROR: compiled RIFE bundle exists but coremldata.bin is missing"
+            exit 1
+          fi
+
           echo "RIFE_COMPILED=$RIFE_COMPILED" >> "$GITHUB_ENV"
           du -sh "$RIFE_COMPILED"
+
       - name: Validate app bundle
         run: |
           set -euo pipefail
@@ -90,15 +120,15 @@ jobs:
           ACTUAL_MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
           echo "Bundle ID: [$ACTUAL_BUNDLE_ID]"
           echo "Minimum OS: [$ACTUAL_MIN_OS]"
-          [ "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID" ]
-          [ "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET" ]
-          echo "Executable architecture:"
+          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
+          test "$ACTUAL_MIN_OS" = "$IOS_DEPLOYMENT_TARGET"
           /usr/bin/file "$APP/FrameBoost"
           /usr/bin/otool -hv "$APP/FrameBoost" | head -n 3
           /usr/bin/lipo -info "$APP/FrameBoost" || true
           /usr/bin/otool -hv "$APP/FrameBoost" | grep -Eq 'ARM64|arm64'
           test -f "$APP/RIFE_4_25.mlmodelc/coremldata.bin"
           echo "RIFE compiled model is embedded and validated"
+
       - name: Package clean IPA
         run: |
           set -euo pipefail
@@ -110,6 +140,7 @@ jobs:
           rm -rf Payload
           unzip -t FrameBoost-unsigned.ipa
           unzip -l FrameBoost-unsigned.ipa | grep -F 'RIFE_4_25.mlmodelc/coremldata.bin' >/dev/null
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
